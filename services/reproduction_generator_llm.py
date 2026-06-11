@@ -50,6 +50,7 @@ Your task is to write a standalone Drupal PHP script (to be executed via `ddev d
 9. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
 10. Do NOT include any markdown code blocks (like ```php or ```) in your output.
 11. Return ONLY the raw PHP code starting with `<?php`.
+12. When installing modules using `\Drupal::service('module_installer')->install(['module_name'])`, keep in mind that this method returns a boolean (TRUE on success, FALSE on failure), NOT an array of enabled modules. Do NOT attempt to pass its return value to functions like `implode` or treat it as an array.
 
 Generate the complete PHP script below:
 """

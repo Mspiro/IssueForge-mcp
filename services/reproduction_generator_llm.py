@@ -42,7 +42,7 @@ Your task is to write a standalone Drupal PHP script (to be executed via `ddev d
 1. Write standard Drupal API code (compatible with Drupal 10/11) to create nodes, fields, content types, views, taxonomies, or configs needed to reproduce this issue.
 2. Use standard Drupal APIs (e.g., `NodeType::create()`, `FieldStorageConfig::create()`, `FieldConfig::create()`, `Node::create()`, `View::create()`).
 3. Always verify if entities/views/fields already exist before creating them to avoid duplicate creation errors.
-4. For Paragraphs: To create paragraph types/bundles, do NOT use `NodeType::create()`. Instead, use `\Drupal\paragraphs\Entity\ParagraphType::create(['id' => 'bundle_name', 'label' => 'Bundle Name'])->save();`. Check if they exist using `\Drupal\paragraphs\Entity\ParagraphType::load('bundle_name')`.
+4. For Paragraphs: To create paragraph types/bundles, do NOT use `NodeType::create()`. Instead, use `\Drupal\paragraphs\Entity\ParagraphsType::create(['id' => 'bundle_name', 'label' => 'Bundle Name'])->save();`. Check if they exist using `\Drupal\paragraphs\Entity\ParagraphsType::load('bundle_name')`.
 5. For Paragraph fields: The field type must be `entity_reference_revisions` (NOT `entity_reference_paragraphs` which does not exist). In the field storage config settings, set `'target_type' => 'paragraph'`.
 6. To check if a module is installed/enabled, use `\Drupal::moduleHandler()->moduleExists('module_name')` (do NOT use `isEnabled()` or other non-existent ModuleHandler methods).
 7. For complex configurations like Views, define them in a YAML heredoc and import them via `\Drupal\Core\Serialization\Yaml::decode($yaml_content)` and `View::create($values)->save()`.

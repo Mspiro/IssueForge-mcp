@@ -66,13 +66,13 @@ class EnvironmentProvisioner:
         os.makedirs(envs_dir, exist_ok=True)
 
         # 1. Cleanup old environment if exists
+        # Always stop and unlist conflicting DDEV projects with this name
+        EnvironmentProvisioner.run_command(
+            ["ddev", "stop", "--omit-snapshot", "--unlist", env_name],
+            cwd=base_dir,
+        )
         if os.path.exists(env_path):
-            print(f"Cleaning up existing environment in {env_path}...")
-            # Try to stop and delete DDEV container first
-            EnvironmentProvisioner.run_command(
-                ["ddev", "stop", "--omit-snapshot", "--unlist", env_name],
-                cwd=base_dir,
-            )
+            print(f"Cleaning up existing environment directory in {env_path}...")
             try:
                 shutil.rmtree(env_path)
             except Exception as e:

@@ -161,9 +161,14 @@ class EnvironmentProvisioner:
         if not is_drupal7:
             print("Installing Drush...")
             drush_ok = EnvironmentProvisioner.run_command(
-                ["ddev", "composer", "require", "drush/drush", "--dev", "-W"],
+                ["ddev", "composer", "require", "drush/drush", "--dev", "--no-update"],
                 cwd=env_path,
             )
+            if drush_ok:
+                drush_ok = EnvironmentProvisioner.run_command(
+                    ["ddev", "composer", "update", "drush/drush"],
+                    cwd=env_path,
+                )
             if not drush_ok:
                 raise Exception("Failed to install Drush.")
 
@@ -197,9 +202,14 @@ class EnvironmentProvisioner:
             else:
                 packages = [f"drupal/{m}" for m in contrib_modules]
                 dl_ok = EnvironmentProvisioner.run_command(
-                    ["ddev", "composer", "require"] + packages + ["-W"],
+                    ["ddev", "composer", "require"] + packages + ["--no-update"],
                     cwd=env_path,
                 )
+                if dl_ok:
+                    dl_ok = EnvironmentProvisioner.run_command(
+                        ["ddev", "composer", "update"] + packages,
+                        cwd=env_path,
+                    )
             if not dl_ok:
                 raise Exception("Failed to download contrib modules.")
 
@@ -215,9 +225,14 @@ class EnvironmentProvisioner:
             else:
                 packages = [f"drupal/{t}" for t in contrib_themes]
                 dl_ok = EnvironmentProvisioner.run_command(
-                    ["ddev", "composer", "require"] + packages + ["-W"],
+                    ["ddev", "composer", "require"] + packages + ["--no-update"],
                     cwd=env_path,
                 )
+                if dl_ok:
+                    dl_ok = EnvironmentProvisioner.run_command(
+                        ["ddev", "composer", "update"] + packages,
+                        cwd=env_path,
+                    )
             if not dl_ok:
                 raise Exception("Failed to download contrib themes.")
 

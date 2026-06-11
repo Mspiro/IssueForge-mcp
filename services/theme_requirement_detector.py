@@ -10,12 +10,7 @@ class ThemeRequirementDetector:
     KNOWN_THEMES = [
         "claro",
         "olivero",
-        "bartik",
-        "seven",
-        "stable",
-        "stable9",
         "stark",
-        "starterkit_theme",
     ]
 
     KNOWN_CONTRIB_THEMES = [
@@ -53,10 +48,10 @@ class ThemeRequirementDetector:
 
         detected = set()
 
-        # Detect from metadata text (core + contrib)
+        # Detect from metadata text (core + contrib) using whole word boundaries
         all_known = ThemeRequirementDetector.KNOWN_THEMES + ThemeRequirementDetector.KNOWN_CONTRIB_THEMES
         for theme in all_known:
-            if theme in combined_text:
+            if re.search(r"\b" + re.escape(theme) + r"\b", combined_text):
                 detected.add(theme)
 
         # Detect from modified file paths using regex
@@ -72,5 +67,9 @@ class ThemeRequirementDetector:
                     theme_candidate = contrib_match.group(1)
                     if theme_candidate not in ["contrib", "custom"]:
                         detected.add(theme_candidate)
+
+        # Filter out stable/stable9/seven/bartik as they cannot be enabled directly or are removed in D11
+        invalid_themes = {"stable", "stable9", "seven", "bartik"}
+        detected = {t for t in detected if t not in invalid_themes}
 
         return sorted(list(detected))

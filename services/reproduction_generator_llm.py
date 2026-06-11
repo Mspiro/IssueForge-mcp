@@ -42,10 +42,12 @@ Your task is to write a standalone Drupal PHP script (to be executed via `ddev d
 1. Write standard Drupal API code (compatible with Drupal 10/11) to create nodes, fields, content types, views, taxonomies, or configs needed to reproduce this issue.
 2. Use standard Drupal APIs (e.g., `NodeType::create()`, `FieldStorageConfig::create()`, `FieldConfig::create()`, `Node::create()`, `View::create()`).
 3. Always verify if entities/views/fields already exist before creating them to avoid duplicate creation errors.
-4. For complex configurations like Views, define them in a YAML heredoc and import them via `\Drupal\Core\Serialization\Yaml::decode($yaml_content)` and `View::create($values)->save()`.
-5. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
-6. Do NOT include any markdown code blocks (like ```php or ```) in your output.
-7. Return ONLY the raw PHP code starting with `<?php`.
+4. For Paragraphs: To create paragraph types/bundles, do NOT use `NodeType::create()`. Instead, use `\Drupal\paragraphs\Entity\ParagraphType::create(['id' => 'bundle_name', 'label' => 'Bundle Name'])->save();`. Check if they exist using `\Drupal\paragraphs\Entity\ParagraphType::load('bundle_name')`.
+5. For Paragraph fields: The field type must be `entity_reference_revisions` (NOT `entity_reference_paragraphs` which does not exist). In the field storage config settings, set `'target_type' => 'paragraph'`.
+6. For complex configurations like Views, define them in a YAML heredoc and import them via `\Drupal\Core\Serialization\Yaml::decode($yaml_content)` and `View::create($values)->save()`.
+7. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
+8. Do NOT include any markdown code blocks (like ```php or ```) in your output.
+9. Return ONLY the raw PHP code starting with `<?php`.
 
 Generate the complete PHP script below:
 """

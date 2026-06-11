@@ -40,7 +40,8 @@ class PatchApplier:
             with open(patch_path, "r", errors="ignore") as f:
                 for line in f:
                     if line.startswith("+++ b/"):
-                        first_file = line[6:].strip()
+                        parts = line[6:].strip().split("\t")
+                        first_file = parts[0].strip()
                         break
         except Exception:
             pass

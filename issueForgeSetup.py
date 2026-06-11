@@ -132,15 +132,65 @@ def configure_keys(target_dir):
                     k, v = line.strip().split("=", 1)
                     existing_keys[k.strip()] = v.strip()
 
-    print("Configure your keys below. Press Enter to keep existing, or skip.")
-    gemini_key = input(f"Gemini API Key [{existing_keys.get('GEMINI_API_KEY', 'None')}]: ").strip()
-    openai_key = input(f"OpenAI API Key [{existing_keys.get('OPENAI_API_KEY', 'None')}]: ").strip()
-    anthropic_key = input(f"Anthropic API Key [{existing_keys.get('ANTHROPIC_API_KEY', 'None')}]: ").strip()
+    # Determine currently configured provider/key
+    current_key = ""
+    current_provider = ""
+    for k in ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
+        if existing_keys.get(k):
+            current_key = existing_keys[k]
+            current_provider = k.replace("_API_KEY", "").capitalize()
+            break
 
-    # Fallback to existing if blank
-    gemini_key = gemini_key or existing_keys.get("GEMINI_API_KEY", "")
-    openai_key = openai_key or existing_keys.get("OPENAI_API_KEY", "")
-    anthropic_key = anthropic_key or existing_keys.get("ANTHROPIC_API_KEY", "")
+    print("Please paste your LLM API Key (Gemini, OpenAI, or Anthropic).")
+    if current_key:
+        # Obfuscate key for display
+        obfuscated = current_key[:6] + "..." + current_key[-4:] if len(current_key) > 10 else "..."
+        print(f"Active key: {GREEN}{current_provider} API Key{RESET} ({obfuscated}) (Press Enter to keep current key).")
+    else:
+        print("We will auto-detect the provider based on the key prefix.")
+
+    user_key = input("API Key: ").strip()
+
+    gemini_key = existing_keys.get("GEMINI_API_KEY", "")
+    openai_key = existing_keys.get("OPENAI_API_KEY", "")
+    anthropic_key = existing_keys.get("ANTHROPIC_API_KEY", "")
+
+    if user_key:
+        # Auto-detect key prefix
+        if user_key.startswith("AIzaSy") or user_key.startswith("AQ."):
+            print(f"{GREEN}Auto-detected Gemini API Key.{RESET}")
+            gemini_key = user_key
+            openai_key = ""
+            anthropic_key = ""
+        elif user_key.startswith("sk-ant-"):
+            print(f"{GREEN}Auto-detected Anthropic API Key.{RESET}")
+            anthropic_key = user_key
+            gemini_key = ""
+            openai_key = ""
+        elif user_key.startswith("sk-"):
+            print(f"{GREEN}Auto-detected OpenAI API Key.{RESET}")
+            openai_key = user_key
+            gemini_key = ""
+            anthropic_key = ""
+        else:
+            # Fallback if prefix doesn't match: ask the user
+            print(f"{YELLOW}Could not auto-detect provider. Please select the provider for this key:{RESET}")
+            print("1. Gemini")
+            print("2. OpenAI")
+            print("3. Anthropic")
+            choice = input("Select [1-3]: ").strip()
+            if choice == "1":
+                gemini_key = user_key
+                openai_key = ""
+                anthropic_key = ""
+            elif choice == "2":
+                openai_key = user_key
+                gemini_key = ""
+                anthropic_key = ""
+            elif choice == "3":
+                anthropic_key = user_key
+                gemini_key = ""
+                openai_key = ""
 
     # Save to .env
     with open(env_file, "w") as f:
@@ -149,7 +199,7 @@ def configure_keys(target_dir):
         f.write(f"OPENAI_API_KEY={openai_key}\n")
         f.write(f"ANTHROPIC_API_KEY={anthropic_key}\n")
 
-    print(f"{GREEN}API keys successfully configured in .env file.{RESET}\n")
+    print(f"{GREEN}API key successfully configured.{RESET}\n")
 
 
 def run_interactive_loop(target_dir, python_path):

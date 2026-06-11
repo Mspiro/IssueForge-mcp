@@ -109,7 +109,24 @@ def setup_venv(target_dir):
                 shutil.rmtree(venv_dir)
             except Exception:
                 pass
-        subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
+        try:
+            subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
+        except subprocess.CalledProcessError:
+            print("Standard venv creation failed (common on Debian/Ubuntu). Retrying with --without-pip...")
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv_dir], check=True)
+            print("Bootstrapping pip...")
+            import urllib.request
+            get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
+            get_pip_path = os.path.join(target_dir, "get-pip.py")
+            try:
+                urllib.request.urlretrieve(get_pip_url, get_pip_path)
+                subprocess.run([python_path, get_pip_path], check=True)
+            except Exception as e:
+                print(f"Failed to bootstrap pip: {e}")
+                raise e
+            finally:
+                if os.path.exists(get_pip_path):
+                    os.remove(get_pip_path)
 
     print("Installing python dependencies...")
     req_file = os.path.join(target_dir, "requirements.txt")

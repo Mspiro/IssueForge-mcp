@@ -21,16 +21,23 @@ class MultiPatchAnalyzer:
             patch_path = f"temp_patch_{patch_id}.diff"
 
             try:
-                self.patch_client.download_patch(
+                _, filename = self.patch_client.download_patch(
                     patch_id,
                     patch_path
                 )
+
+                if not filename or not filename.lower().endswith((".patch", ".diff")):
+                    continue
 
                 analysis = PatchAnalyzer.analyze_patch_file(
                     patch_path
                 )
 
+                if analysis["file_count"] == 0:
+                    continue
+
                 analysis["patch_id"] = patch_id
+                analysis["filename"] = filename
 
                 results.append(analysis)
 
@@ -48,7 +55,8 @@ class MultiPatchAnalyzer:
         if not patch_results:
             return {
                 "modified_files": [],
-                "modified_functions": []
+                "modified_functions": [],
+                "filename": None,
             }
 
         best_patch = max(

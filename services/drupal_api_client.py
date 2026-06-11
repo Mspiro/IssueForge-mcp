@@ -1,122 +1,141 @@
-import re
 import requests
-
-
-DRUPAL_API_BASE = "https://www.drupal.org/api-d7/node"
-
-
-ISSUE_STATUS_MAP = {
-    "1": "Active",
-    "2": "Needs work",
-    "3": "Needs review",
-    "4": "Reviewed & tested by the community",
-    "5": "Patch needs improvement",
-    "6": "Postponed",
-    "7": "Closed (fixed)",
-    "8": "Closed (duplicate)",
-    "9": "Closed (won’t fix)",
-    "10": "Closed (works as designed)",
-    "11": "Closed (cannot reproduce)",
-    "12": "Closed (outdated)",
-    "13": "Active",
-}
-
-
-ISSUE_PRIORITY_MAP = {
-    "400": "Critical",
-    "300": "Major",
-    "200": "Normal",
-    "100": "Minor",
-}
-
-
-ISSUE_CATEGORY_MAP = {
-    "1": "Bug report",
-    "2": "Feature request",
-    "3": "Support request",
-    "4": "Task",
-    "5": "Plan",
-}
+import time
+import re
 
 
 class DrupalAPIClient:
     """
-    Client for interacting with Drupal.org issue JSON endpoints.
+    Client for fetching Drupal.org issue metadata safely with:
+
+    - session reuse
+    - exponential backoff
+    - caching
+    - rate-limit handling
     """
 
-    @staticmethod
-    def extract_issue_id(issue_url: str) -> str:
-        match = re.search(r'/issues/(\d+)', issue_url)
+    BASE_URL = "https://www.drupal.org/api-d7"
+
+    STATUS_MAP = {
+        "1": "Active",
+        "2": "Fixed",
+        "13": "Needs review",
+        "14": "Needs work",
+        "15": "Reviewed & tested by the community",
+        "16": "Patch to be ported",
+    }
+
+    PRIORITY_MAP = {
+        "50": "Critical",
+        "100": "Major",
+        "150": "Normal",
+        "200": "Minor",
+    }
+
+    CATEGORY_MAP = {
+        "1": "Bug report",
+        "2": "Task",
+        "3": "Feature request",
+        "4": "Support request",
+        "5": "Plan",
+    }
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.cache = {}
+
+    def extract_issue_id(self, issue_url: str):
+
+        match = re.search(r"/issues/(\d+)", issue_url)
 
         if not match:
-            raise ValueError("Invalid Drupal issue URL format.")
+            raise ValueError("Invalid Drupal issue URL")
 
         return match.group(1)
 
-    @staticmethod
-    def fetch_issue_data(issue_id: str) -> dict:
-        url = f"{DRUPAL_API_BASE}/{issue_id}.json"
+    def safe_request(self, url):
 
-        response = requests.get(url)
+        if url in self.cache:
+            return self.cache[url]
 
-        if response.status_code != 200:
-            raise Exception(
-                f"Failed to fetch issue data. Status code: {response.status_code}"
+        retries = 5
+        backoff = 1
+
+        for _ in range(retries):
+
+            response = self.session.get(
+                url,
+                headers={
+                    "User-Agent": "IssueForge-MCP-Client"
+                }
             )
 
-        return response.json()
+            if response.status_code == 200:
+                data = response.json()
+                self.cache[url] = data
+                return data
 
-    @staticmethod
-    def parse_issue_metadata(issue_json: dict) -> dict:
-        """
-        Extract structured metadata from Drupal issue JSON.
-        """
+            if response.status_code == 429:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
 
-        body_html = issue_json.get("body", {}).get("value", "")
+            raise Exception(
+                f"Failed request: {url} (status {response.status_code})"
+            )
+
+        raise Exception("Rate limited after multiple retries")
+
+    def fetch_issue_data(self, issue_id):
+
+        url = f"{self.BASE_URL}/node/{issue_id}.json"
+
+        return self.safe_request(url)
+
+    def parse_issue_metadata(self, issue_json):
+
+        patch_ids = []
+
+        for file_entry in issue_json.get("field_issue_files", []):
+
+            file_data = file_entry.get("file")
+
+            if file_data and "id" in file_data:
+                patch_ids.append(file_data["id"])
+
+        comment_ids = []
+
+        for comment in issue_json.get("comments", []):
+            comment_ids.append(comment["id"])
 
         return {
             "title": issue_json.get("title"),
-
-            "status": ISSUE_STATUS_MAP.get(
+            "status": self.STATUS_MAP.get(
                 issue_json.get("field_issue_status"),
                 issue_json.get("field_issue_status")
             ),
-
             "component": issue_json.get("field_issue_component"),
-
             "version": issue_json.get("field_issue_version"),
-
-            "priority": ISSUE_PRIORITY_MAP.get(
+            "priority": self.PRIORITY_MAP.get(
                 issue_json.get("field_issue_priority"),
                 issue_json.get("field_issue_priority")
             ),
-
-            "category": ISSUE_CATEGORY_MAP.get(
+            "category": self.CATEGORY_MAP.get(
                 issue_json.get("field_issue_category"),
                 issue_json.get("field_issue_category")
             ),
-
-            "problem_description_html": body_html,
-
-            "patch_file_ids": [
-                f["file"]["id"]
-                for f in issue_json.get("field_issue_files", [])
-            ],
-
-            "comment_ids": [
-                c["id"]
-                for c in issue_json.get("comments", [])
-            ],
+            "problem_description_html": issue_json.get(
+                "body", {}
+            ).get("value", ""),
+            "patch_file_ids": patch_ids,
+            "comment_ids": comment_ids,
+            "issue_id": issue_json.get("nid"),
+            "issue_url": issue_json.get("url"),
         }
 
-    def get_issue_metadata(self, issue_url: str) -> dict:
+    def get_issue_metadata(self, issue_url: str):
+
         issue_id = self.extract_issue_id(issue_url)
 
         issue_json = self.fetch_issue_data(issue_id)
 
-        metadata = self.parse_issue_metadata(issue_json)
-
-        metadata["issue_id"] = issue_id
-        metadata["issue_url"] = issue_url
-
-        return metadata
+        return self.parse_issue_metadata(issue_json)

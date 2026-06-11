@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+.venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local credentials
+.env
+
+# Local environments (re-provisioned dynamically)
+environments/env_*
+
+# Temporary patch downloads & reproduction files
+temp_patch_*
+issue.patch
+setup_reproduction.php
+*.diff
+*.patch
+
+# DDEV files inside specific environments
+.ddev/

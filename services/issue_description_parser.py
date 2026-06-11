@@ -1,39 +1,86 @@
 import re
-from typing import Dict
-
-import re
-
-
-def strip_html_tags(text):
-    clean = re.sub(r"<.*?>", "", text)
-    return clean.strip()
+from typing import Dict, List
 
 
 class IssueDescriptionParser:
     """
-    Extract structured sections from Drupal issue HTML description.
+    Extract structured sections from Drupal issue descriptions.
     """
 
-    SECTION_PATTERNS = {
-        "problem": r"Problem/Motivation</h3>\s*(.*?)<h",
-        "steps": r"Steps to reproduce</h4>\s*(.*?)<h",
-        "expected": r"Expected behaviour:</h5>\s*(.*?)<h",
-        "actual": r"Actual behaviour:</h5>\s*(.*?)<h",
-        "proposed_resolution": r"Proposed resolution</h3>\s*(.*?)<h",
-    }
+    @staticmethod
+    def strip_html(text: str) -> str:
+        return re.sub(r"<.*?>", "", text).strip()
 
     @staticmethod
-    def extract_sections(html: str) -> Dict:
+    def extract_steps(description_html: str) -> List[str]:
+        """
+        Extract ordered reproduction steps from the correct section only.
+        """
 
-        extracted = {}
+        if not description_html:
+            return []
 
-        for section, pattern in IssueDescriptionParser.SECTION_PATTERNS.items():
+        # Locate the steps section explicitly
+        steps_section_match = re.search(
+            r"Steps to reproduce.*?<ol>(.*?)</ol>",
+            description_html,
+            re.DOTALL | re.IGNORECASE,
+        )
 
-            match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+        if not steps_section_match:
+            return []
 
-            if match:
-                extracted[section] = strip_html_tags(match.group(1))
-            else:
-                extracted[section] = ""
+        ol_block = steps_section_match.group(1)
 
-        return extracted
+        raw_steps = re.findall(r"<li>(.*?)</li>", ol_block, re.DOTALL)
+
+        return [
+            IssueDescriptionParser.strip_html(step)
+            for step in raw_steps
+            if step.strip()
+        ]
+
+    @staticmethod
+    def extract_section(description_html: str, header: str) -> str:
+        """
+        Extract section text by heading label.
+        """
+
+        match = re.search(
+            rf"{header}.*?<p>(.*?)</p>",
+            description_html,
+            re.DOTALL | re.IGNORECASE,
+        )
+
+        if not match:
+            return ""
+
+        return IssueDescriptionParser.strip_html(match.group(1))
+
+    @staticmethod
+    def extract_sections(description_html: str) -> Dict:
+
+        if not description_html:
+            return {}
+
+        return {
+            "problem": IssueDescriptionParser.extract_section(
+                description_html,
+                "Problem"
+            ),
+            "expected": IssueDescriptionParser.extract_section(
+                description_html,
+                "Expected behaviour"
+            ),
+            "actual": IssueDescriptionParser.extract_section(
+                description_html,
+                "Actual behaviour"
+            ),
+            "proposed_resolution": IssueDescriptionParser.extract_section(
+                description_html,
+                "Proposed resolution"
+            ),
+            "steps": IssueDescriptionParser.extract_steps(
+                description_html
+            ),
+        }

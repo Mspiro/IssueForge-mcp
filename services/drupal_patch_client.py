@@ -1,52 +1,71 @@
 import requests
-from typing import Dict
-
-
-DRUPAL_FILE_API = "https://www.drupal.org/api-d7/file"
+import time
 
 
 class DrupalPatchClient:
     """
-    Client for downloading patch files attached to Drupal issues.
+    Downloads patch files safely with retry + caching.
     """
 
-    @staticmethod
-    def get_file_metadata(file_id: str) -> Dict:
-        url = f"{DRUPAL_FILE_API}/{file_id}.json"
+    BASE_URL = "https://www.drupal.org/api-d7/file"
 
-        response = requests.get(url)
+    def __init__(self):
+        self.session = requests.Session()
+        self.cache = {}
 
-        if response.status_code != 200:
-            raise Exception(
-                f"Failed to fetch metadata for file {file_id}"
+    def safe_request(self, url):
+
+        if url in self.cache:
+            return self.cache[url]
+
+        retries = 5
+        backoff = 1
+
+        for _ in range(retries):
+
+            response = self.session.get(
+                url,
+                headers={
+                    "User-Agent": "IssueForge-MCP-Client"
+                }
             )
 
-        return response.json()
+            if response.status_code == 200:
+                self.cache[url] = response
+                return response
 
-    @staticmethod
-    def extract_download_url(file_json: Dict) -> str:
-        """
-        Extract patch download URL from file metadata.
-        """
-        return file_json.get("url")
+            if response.status_code == 429:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
 
-    def get_patch_download_url(self, file_id: str) -> str:
-        metadata = self.get_file_metadata(file_id)
+            raise Exception(
+                f"Failed patch request: {url} ({response.status_code})"
+            )
 
-        return self.extract_download_url(metadata)
+        raise Exception("Rate limited after multiple retries")
 
-    def download_patch(self, file_id: str, save_path: str):
-        metadata = self.get_file_metadata(file_id)
+    def get_patch_metadata(self, patch_id):
+        metadata_url = f"{self.BASE_URL}/{patch_id}.json"
+        metadata_response = self.safe_request(metadata_url)
+        return metadata_response.json()
 
-        download_url = metadata.get("url")
+    def get_patch_download_url(self, patch_id):
+        metadata = self.get_patch_metadata(patch_id)
+        return metadata.get("url")
 
-        if not download_url:
-            raise Exception("No download URL found")
+    def download_patch(self, patch_id, output_path):
 
-        response = requests.get(download_url)
+        metadata_json = self.get_patch_metadata(patch_id)
 
-        if response.status_code != 200:
-            raise Exception("Failed to download patch")
+        patch_url = metadata_json.get("url")
 
-        with open(save_path, "wb") as f:
-            f.write(response.content)
+        if not patch_url:
+            raise Exception("Patch URL missing from metadata")
+
+        patch_response = self.safe_request(patch_url)
+
+        with open(output_path, "wb") as f:
+            f.write(patch_response.content)
+
+        return output_path, metadata_json.get("name")

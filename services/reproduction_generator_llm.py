@@ -46,9 +46,10 @@ Your task is to write a standalone Drupal PHP script (to be executed via `ddev d
 5. For Paragraph fields: The field type must be `entity_reference_revisions` (NOT `entity_reference_paragraphs` which does not exist). In the field storage config settings, set `'target_type' => 'paragraph'`.
 6. To check if a module is installed/enabled, use `\Drupal::moduleHandler()->moduleExists('module_name')` (do NOT use `isEnabled()` or other non-existent ModuleHandler methods).
 7. For complex configurations like Views, define them in a YAML heredoc and import them via `\Drupal\Core\Serialization\Yaml::decode($yaml_content)` and `View::create($values)->save()`.
-8. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
-9. Do NOT include any markdown code blocks (like ```php or ```) in your output.
-10. Return ONLY the raw PHP code starting with `<?php`.
+8. For text formats/filters: Do NOT hardcode or configure settings/filters that belong to external modules (like 'filter_linkit') unless that module is explicitly requested or enabled. Stick to core filter plugins: 'filter_html', 'filter_align', 'filter_caption', 'filter_html_image_secure', 'filter_autop', 'filter_htmlcorrector', 'filter_html_escape', 'filter_url', 'filter_null'.
+9. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
+10. Do NOT include any markdown code blocks (like ```php or ```) in your output.
+11. Return ONLY the raw PHP code starting with `<?php`.
 
 Generate the complete PHP script below:
 """

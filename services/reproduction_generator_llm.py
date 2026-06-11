@@ -51,6 +51,7 @@ Your task is to write a standalone Drupal PHP script (to be executed via `ddev d
 10. Do NOT include any markdown code blocks (like ```php or ```) in your output.
 11. Return ONLY the raw PHP code starting with `<?php`.
 12. When installing modules using `\Drupal::service('module_installer')->install(['module_name'])`, keep in mind that this method returns a boolean (TRUE on success, FALSE on failure), NOT an array of enabled modules. Do NOT attempt to pass its return value to functions like `implode` or treat it as an array.
+13. For Layout Builder: To check if Layout Builder is enabled on a view display, use `$view_display_node->getThirdPartySetting('layout_builder', 'enabled')`. To enable Layout Builder on a view display, use `$view_display_node->setThirdPartySetting('layout_builder', 'enabled', TRUE)->save();`. Do NOT use `getRenderer()` or `setComponent('layout_builder', ...)` which will throw fatal errors.
 
 Generate the complete PHP script below:
 """

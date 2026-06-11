@@ -21,8 +21,9 @@ class DiffSkeletonGenerator:
 
             for fn in functions:
                 skeleton.append(f"@@ function {fn} @@")
+                strategy = strategies[min(len(strategies)-1, functions.index(fn))] if strategies else "Apply custom fix logic"
                 skeleton.append(
-                    f"+ // TODO: {strategies[min(len(strategies)-1, functions.index(fn))]}"
+                    f"+ // TODO: {strategy}"
                 )
 
             skeleton.append("")

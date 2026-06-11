@@ -18,7 +18,7 @@ class LlmClient:
         # 1. Try Gemini API
         gemini_key = os.getenv("GEMINI_API_KEY")
         if gemini_key:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={gemini_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
             headers = {"Content-Type": "application/json"}
             payload = {
                 "contents": [
@@ -33,7 +33,7 @@ class LlmClient:
                 }
             }
             try:
-                response = requests.post(url, json=payload, headers=headers, timeout=60)
+                response = requests.post(url, json=payload, headers=headers, timeout=120)
                 if response.status_code == 200:
                     data = response.json()
                     # Parse response content

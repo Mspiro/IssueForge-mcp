@@ -100,6 +100,31 @@ class EnvironmentProvisioner:
         if not clone_ok:
             raise Exception("Failed to clone Drupal repository.")
 
+        # Clone Contrib Module if applicable
+        is_contrib = env_plan.get("is_contrib", False)
+        project_name = env_plan.get("project_name", "drupal")
+        contrib_branch = env_plan.get("contrib_branch")
+
+        if is_contrib and project_name != "drupal":
+            contrib_dir = os.path.join(env_path, "modules", "contrib")
+            os.makedirs(contrib_dir, exist_ok=True)
+            module_dir = os.path.join(contrib_dir, project_name)
+            contrib_repo = f"https://git.drupalcode.org/project/{project_name}.git"
+            print(f"Cloning Contrib Module {project_name} ({contrib_branch}) into {module_dir}...")
+
+            module_clone_ok = EnvironmentProvisioner.run_command([
+                "git",
+                "clone",
+                "--branch",
+                contrib_branch,
+                "--depth",
+                "1",
+                contrib_repo,
+                module_dir,
+            ])
+            if not module_clone_ok:
+                raise Exception(f"Failed to clone contrib module {project_name}.")
+
         # 3. Configure DDEV
         project_type = env_plan.get("project_type", "drupal11")
         print("Configuring DDEV...")
@@ -157,6 +182,11 @@ class EnvironmentProvisioner:
 
         # 7. Download Contrib Modules
         contrib_modules = env_plan.get("contrib_modules", [])
+        is_contrib = env_plan.get("is_contrib", False)
+        project_name = env_plan.get("project_name", "drupal")
+        if is_contrib:
+            contrib_modules = [m for m in contrib_modules if m != project_name]
+
         if contrib_modules:
             print(f"Downloading contrib modules: {contrib_modules}...")
             if is_drupal7:

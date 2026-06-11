@@ -26,6 +26,37 @@ class PatchApplier:
         return patch_path
 
     @staticmethod
+    def _get_apply_cwd(env_path: str, patch_path: str) -> str:
+        """
+        Auto-detect the target repository directory within the environment.
+        For Drupal core issues, this is the root env_path.
+        For contrib module issues, this is the subdirectory of the contrib module.
+        """
+        if not os.path.exists(patch_path):
+            return env_path
+
+        first_file = None
+        try:
+            with open(patch_path, "r", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("+++ b/"):
+                        first_file = line[6:].strip()
+                        break
+        except Exception:
+            pass
+
+        if first_file:
+            contrib_base = os.path.join(env_path, "modules", "contrib")
+            if os.path.exists(contrib_base):
+                for item in os.listdir(contrib_base):
+                    item_path = os.path.join(contrib_base, item)
+                    if os.path.isdir(item_path):
+                        if os.path.exists(os.path.join(item_path, first_file)):
+                            print(f"Auto-detected target directory for patch: {item_path}")
+                            return item_path
+        return env_path
+
+    @staticmethod
     def check_patch(env_path: str, patch_id: str) -> Dict:
         """
         Runs git apply --check to verify if the patch applies cleanly.
@@ -36,6 +67,7 @@ class PatchApplier:
             patch_filename = os.path.basename(patch_path)
 
             print(f"Checking patch compatibility for {patch_filename}...")
+            apply_cwd = PatchApplier._get_apply_cwd(env_path, patch_path)
 
             # Strategies to try: (args list, display name)
             strategies = [
@@ -46,10 +78,10 @@ class PatchApplier:
             ]
 
             for args, name in strategies:
-                cmd = ["git", "apply"] + args + ["--check", patch_filename]
+                cmd = ["git", "apply"] + args + ["--check", patch_path]
                 process = subprocess.run(
                     cmd,
-                    cwd=env_path,
+                    cwd=apply_cwd,
                     capture_output=True,
                     text=True,
                 )
@@ -64,8 +96,8 @@ class PatchApplier:
 
             # If all failed, return details from the default check
             process = subprocess.run(
-                ["git", "apply", "--check", "--verbose", patch_filename],
-                cwd=env_path,
+                ["git", "apply", "--check", "--verbose", patch_path],
+                cwd=apply_cwd,
                 capture_output=True,
                 text=True,
             )
@@ -107,13 +139,14 @@ class PatchApplier:
                 }
 
             strategy_args = check_res.get("strategy_args", [])
+            apply_cwd = PatchApplier._get_apply_cwd(env_path, patch_path)
 
             # 2. Apply patch using successful strategy
             print(f"Applying patch {patch_filename} with args {strategy_args}...")
-            cmd = ["git", "apply"] + strategy_args + [patch_filename]
+            cmd = ["git", "apply"] + strategy_args + [patch_path]
             process = subprocess.run(
                 cmd,
-                cwd=env_path,
+                cwd=apply_cwd,
                 capture_output=True,
                 text=True,
             )

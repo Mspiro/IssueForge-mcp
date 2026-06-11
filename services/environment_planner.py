@@ -48,6 +48,12 @@ class EnvironmentPlanner:
         )
         latest_patch_id = patch_ids[-1] if patch_ids else None
 
+        project_name = metadata.get("project_name", "drupal")
+        is_contrib = (project_name != "drupal")
+
+        if is_contrib and project_name not in required_modules:
+            required_modules.append(project_name)
+
         contrib_modules = [
             m for m in required_modules
             if ModuleRequirementDetector.is_contrib(m)
@@ -71,4 +77,7 @@ class EnvironmentPlanner:
             "php_version": version_info["php_version"],
             "patch_available": bool(latest_patch_id),
             "latest_patch_id": latest_patch_id,
+            "is_contrib": is_contrib,
+            "project_name": project_name,
+            "contrib_branch": version_info.get("contrib_branch") if is_contrib else None,
         }

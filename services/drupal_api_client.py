@@ -138,4 +138,13 @@ class DrupalAPIClient:
 
         issue_json = self.fetch_issue_data(issue_id)
 
-        return self.parse_issue_metadata(issue_json)
+        metadata = self.parse_issue_metadata(issue_json)
+
+        # Extract project name from URL: e.g. /project/layout_paragraphs/issues/3401176
+        project_name = "drupal"
+        match = re.search(r"/project/([^/]+)", issue_url)
+        if match:
+            project_name = match.group(1)
+
+        metadata["project_name"] = project_name
+        return metadata

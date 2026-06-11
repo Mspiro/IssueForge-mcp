@@ -48,8 +48,18 @@ class VersionResolver:
         """
         Resolve environment configuration from issue metadata.
         """
-
+        project_name = metadata.get("project_name", "drupal")
         raw_version = metadata.get("version", "main")
+
+        if project_name != "drupal":
+            # Contrib module targets. Host Drupal core environment is 11.x
+            # The module's own checkout branch is raw_version.
+            return {
+                "checkout_ref": "11.x",
+                "project_type": "drupal11",
+                "php_version": "8.2",
+                "contrib_branch": VersionResolver.normalize_branch(raw_version)
+            }
 
         checkout_ref = VersionResolver.normalize_branch(
             raw_version

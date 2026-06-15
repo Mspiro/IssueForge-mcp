@@ -16,8 +16,19 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/preview_issue.py <URL_OR_ID>
 ```
-Shows: title, status, patches, MRs.
-After running, briefly summarize what you see (title, status, key patches/MRs) and ask the user:
+After running, present the issue to the user like this:
+
+**Brief summary** (2–3 sentences): What is the issue about? What is the current status?
+
+**Patches / MRs**: List what is available (IDs, titles, states).
+
+**Discussion**: Read the `RECENT_COMMENTS` block at the bottom of the output.
+Do NOT repeat the raw comment text. Instead, in 2–4 sentences, explain:
+- What is the current state of the conversation?
+- What open question or decision is still pending?
+- What is blocking resolution (if anything)?
+
+Then ask the user:
 - [y] Full flow — analyze + provision environment + reproduce
 - [a] Analysis only — see detailed plan first, then decide
 - [n] Different issue

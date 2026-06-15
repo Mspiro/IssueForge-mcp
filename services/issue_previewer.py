@@ -55,8 +55,10 @@ class IssuePreviewer:
             except Exception:
                 patches.append({"id": fid, "filename": f"patch-{fid}", "size": 0, "url": ""})
 
-        # --- Comments — sample for MR detection ---
+        # --- Comments — fetch recent + sample for MR detection ---
         comment_ids = meta.get("comment_ids", [])
+        recent_comments = []
+        comment_bodies = []
         if comment_ids:
             n = len(comment_ids)
             mid = n // 2
@@ -65,10 +67,29 @@ class IssuePreviewer:
                 + comment_ids[max(0, mid - 2):mid + 2]
                 + comment_ids[-5:]
             ))
-            comments = comment_client.get_multiple_comments(sample)
-            comment_bodies = [c["body_html"] for c in comments if c.get("body_html")]
-        else:
-            comment_bodies = []
+            all_fetched = comment_client.get_multiple_comments(sample)
+            comment_bodies = [c["body_html"] for c in all_fetched if c.get("body_html")]
+
+            # Build plain-text recent comments (last 3)
+            last_ids = comment_ids[-3:]
+            last_fetched = [c for c in all_fetched if c.get("comment_id") in last_ids]
+            # If some weren't in the sample, fetch them separately
+            fetched_ids = {c.get("comment_id") for c in all_fetched}
+            missing = [i for i in last_ids if i not in fetched_ids]
+            if missing:
+                last_fetched += comment_client.get_multiple_comments(missing)
+            last_fetched.sort(key=lambda c: last_ids.index(c["comment_id"])
+                              if c.get("comment_id") in last_ids else 999)
+            for c in last_fetched[-3:]:
+                raw_body = c.get("body_html", "")
+                text = re.sub(r"<[^>]+>", " ", raw_body)
+                text = html.unescape(text).strip()
+                text = re.sub(r"\s+", " ", text)
+                if text:
+                    ts = c.get("created")
+                    date = (datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+                            if ts else "")
+                    recent_comments.append({"date": date, "text": text[:600]})
 
         # --- MR detection ---
         issue_body = meta.get("problem_description_html", "")
@@ -107,6 +128,7 @@ class IssuePreviewer:
             "total_comments": total_comments,
             "patches": patches,
             "detected_mrs": unique_mrs,
+            "recent_comments": recent_comments,
         }
 
     @staticmethod
@@ -225,5 +247,14 @@ class IssuePreviewer:
         lines.append("")
 
         lines.append(sep)
+
+        # Output recent comments as a separate block for Claude to interpret
+        recent = preview.get("recent_comments", [])
+        if recent:
+            lines.append("")
+            lines.append("RECENT_COMMENTS:")
+            for c in recent:
+                date = c.get("date", "")
+                lines.append(f"[{date}] {c['text']}")
 
         return "\n".join(lines)

@@ -51,8 +51,9 @@ def get_install_dir():
 
 def clone_or_update(install_dir):
     if os.path.isdir(os.path.join(install_dir, ".git")):
-        print("Existing installation found — pulling latest changes...")
-        run(["git", "pull"], cwd=install_dir)
+        print("Existing installation found — updating to latest...")
+        run(["git", "fetch", "origin"], cwd=install_dir)
+        run(["git", "reset", "--hard", "origin/main"], cwd=install_dir)
     else:
         print(f"Cloning IssueForge into {install_dir}...")
         run(["git", "clone", REPO_URL, install_dir])

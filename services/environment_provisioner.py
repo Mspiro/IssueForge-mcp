@@ -109,6 +109,31 @@ class EnvironmentProvisioner:
                 logger.warning("Could not remove %s: %s", env_path, e)
 
     @staticmethod
+    def _filter_existing_modules(modules: list) -> list:
+        """
+        Check each module against the drupal.org API and drop any that
+        don't exist as real project_module nodes.  Prevents composer require
+        from failing on names scraped from issue text that aren't real packages.
+        """
+        import requests
+        verified = []
+        for name in modules:
+            try:
+                resp = requests.get(
+                    "https://www.drupal.org/api-d7/node.json",
+                    params={"type": "project_module", "field_project_machine_name": name},
+                    timeout=8,
+                )
+                exists = bool(resp.status_code == 200 and resp.json().get("list"))
+            except Exception:
+                exists = True  # network error — keep it and let composer decide
+            if exists:
+                verified.append(name)
+            else:
+                print(f"  [Skip] '{name}' is not a real drupal.org module — skipping.")
+        return verified
+
+    @staticmethod
     def provision(issue_id: str, env_plan: Dict) -> Dict:
         for tool in ["git", "ddev", "docker"]:
             if shutil.which(tool) is None:
@@ -257,6 +282,8 @@ class EnvironmentProvisioner:
         contrib_modules = env_plan.get("contrib_modules", [])
         if is_contrib and project_name in contrib_modules:
             contrib_modules = [m for m in contrib_modules if m != project_name]
+        if contrib_modules:
+            contrib_modules = EnvironmentProvisioner._filter_existing_modules(contrib_modules)
         if contrib_modules:
             print(f"Downloading contrib modules: {contrib_modules}...")
             packages = [f"drupal/{m}" for m in contrib_modules]

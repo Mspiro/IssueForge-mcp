@@ -69,18 +69,6 @@ class ContribModuleDetector:
         "toolbar", "tour", "tracker", "update", "views_ui", "workspaces",
     }
 
-    # Names that appear in issue content but are NOT installable Drupal packages.
-    NEVER_INSTALL = {
-        # DrupalCI / testing infrastructure (not on Packagist)
-        "drupalci_environments", "drupalci", "drupal_ti",
-        # PHP testing tools (not Drupal modules)
-        "phpunit", "phpunit_listener_drupal", "behat", "mink", "phpspec", "phpstan",
-        "phpcs", "phpcbf", "php_codesniffer",
-        # Generic / platform names
-        "php", "mysql", "pgsql", "sqlite", "composer", "drush", "drupal",
-        # Common words that regex can match but aren't modules
-        "core", "contrib", "custom", "module", "theme", "profile",
-    }
 
     @staticmethod
     def detect(metadata: Dict) -> List[str]:
@@ -97,7 +85,7 @@ class ContribModuleDetector:
 
         found: set = set()
 
-        blocked = ContribModuleDetector.CORE_MODULES | ContribModuleDetector.NEVER_INSTALL
+        blocked = ContribModuleDetector.CORE_MODULES
 
         # 1. Explicit drupal.org/project/NAME links (most reliable signal)
         for match in re.finditer(

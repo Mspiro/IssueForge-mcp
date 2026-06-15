@@ -45,18 +45,14 @@ def check_prerequisites():
 
 
 def get_install_dir():
-    # If install.py is already inside a cloned IssueForge repo, default to that dir.
+    # Default to wherever install.py is located.
+    # In pipe mode (curl | python3) fall back to ~/IssueForge.
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    looks_like_repo = (
-        os.path.isdir(os.path.join(script_dir, "scripts"))
-        and os.path.isdir(os.path.join(script_dir, "services"))
-        and os.path.isfile(os.path.join(script_dir, "requirements.txt"))
-    )
-    default = script_dir if looks_like_repo else DEFAULT_DIR
+    default = script_dir if os.path.isdir(script_dir) else DEFAULT_DIR
 
     if not sys.stdin.isatty():
-        print(f"Install directory: {default} (using default)")
-        return default
+        print(f"Install directory: {DEFAULT_DIR} (using default)")
+        return DEFAULT_DIR
     answer = input(f"Install directory [{default}]: ").strip()
     return answer or default
 

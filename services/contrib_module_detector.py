@@ -69,6 +69,19 @@ class ContribModuleDetector:
         "toolbar", "tour", "tracker", "update", "views_ui", "workspaces",
     }
 
+    # Names that appear in issue content but are NOT installable Drupal packages.
+    NEVER_INSTALL = {
+        # DrupalCI / testing infrastructure (not on Packagist)
+        "drupalci_environments", "drupalci", "drupal_ti",
+        # PHP testing tools (not Drupal modules)
+        "phpunit", "phpunit_listener_drupal", "behat", "mink", "phpspec", "phpstan",
+        "phpcs", "phpcbf", "php_codesniffer",
+        # Generic / platform names
+        "php", "mysql", "pgsql", "sqlite", "composer", "drush", "drupal",
+        # Common words that regex can match but aren't modules
+        "core", "contrib", "custom", "module", "theme", "profile",
+    }
+
     @staticmethod
     def detect(metadata: Dict) -> List[str]:
         """
@@ -84,12 +97,14 @@ class ContribModuleDetector:
 
         found: set = set()
 
+        blocked = ContribModuleDetector.CORE_MODULES | ContribModuleDetector.NEVER_INSTALL
+
         # 1. Explicit drupal.org/project/NAME links (most reliable signal)
         for match in re.finditer(
             r"drupal\.org/project/([a-z0-9_]+)", combined_text
         ):
             name = match.group(1)
-            if name not in ContribModuleDetector.CORE_MODULES and name != "drupal":
+            if name not in blocked:
                 found.add(name)
 
         # 2. Composer require patterns
@@ -97,7 +112,7 @@ class ContribModuleDetector:
             r"(?:composer\s+require\s+)?drupal/([a-z0-9_]+)", combined_text
         ):
             name = match.group(1)
-            if name not in ContribModuleDetector.CORE_MODULES and name != "drupal":
+            if name not in blocked:
                 found.add(name)
 
         # 3. Known-module keyword matching (word-boundary aware)

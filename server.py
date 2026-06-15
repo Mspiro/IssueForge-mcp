@@ -16,6 +16,8 @@ from classifiers.fix_strategy_generator import FixStrategyGenerator
 from classifiers.comment_signal_detector import CommentSignalDetector
 from classifiers.patch_status_classifier import PatchStatusClassifier
 from classifiers.patch_plan_generator import PatchPlanGenerator
+from classifiers.llm_analyzer import LlmAnalyzer
+from services.gitlab_mr_client import GitlabMrClient
 
 
 class IssueForgeServer:
@@ -23,9 +25,10 @@ class IssueForgeServer:
     Main orchestration engine for analyzing Drupal issues.
     """
 
-    def __init__(self):
+    def __init__(self, gitlab_token: str = ""):
         self.api_client = DrupalAPIClient()
         self.comment_client = DrupalCommentClient()
+        self.mr_client = GitlabMrClient(token=gitlab_token)
 
     def analyze_issue(self, issue_url: str):
 
@@ -44,70 +47,89 @@ class IssueForgeServer:
         # Step 3: analyze best patch if available
         patch_results = []
         if patch_ids:
-
             patch_analyzer = MultiPatchAnalyzer()
-
-            patch_results = patch_analyzer.analyze_all_patches(
-                patch_ids
-            )
-
-            patch_analysis = patch_analyzer.select_best_patch(
-                patch_results
-            )
+            patch_results = patch_analyzer.analyze_all_patches(patch_ids)
+            patch_analysis = patch_analyzer.select_best_patch(patch_results)
 
         valid_patch_ids = [res["patch_id"] for res in patch_results]
 
         modified_files = patch_analysis["modified_files"]
         modified_functions = patch_analysis["modified_functions"]
 
-        # Step 4: detect subsystem
-        subsystem_result = SubsystemDetector.detect_from_paths(
-            modified_files
-        )
-
+        # Step 4: fast heuristic subsystem detection (file paths)
+        subsystem_result = SubsystemDetector.detect_from_paths(modified_files)
         detected_subsystems = subsystem_result["detected_subsystems"]
 
-        # Step 5: detect root-cause signals
+        # Step 5: fast heuristic root-cause signals
         root_cause_result = RootCauseDetector.detect(
-            modified_functions,
-            detected_subsystems
+            modified_functions, detected_subsystems
         )
-
         root_signals = root_cause_result["root_cause_signals"]
 
-        # Step 6: generate fix strategies
-        strategy_result = FixStrategyGenerator.generate(
-            root_signals,
-            modified_functions
+        # Step 6: LLM-enhanced analysis — runs when heuristics have low coverage
+        #         (< 2 subsystems or < 1 root cause signal) or always for
+        #         richer strategies.  Falls back to heuristics if LLM fails.
+        description_sections_early = IssueDescriptionParser.extract_sections(
+            metadata.get("problem_description_html", "")
         )
+        problem_summary_for_llm = description_sections_early.get("problem", "")
+
+        llm_analysis = LlmAnalyzer.analyze(
+            issue_title=metadata.get("title", ""),
+            problem_summary=problem_summary_for_llm,
+            modified_files=modified_files,
+            modified_functions=modified_functions,
+            preliminary_subsystems=detected_subsystems,
+            preliminary_root_cause_signals=root_signals,
+        )
+
+        # Merge: LLM result takes precedence, heuristics fill any gaps.
+        final_subsystems = llm_analysis.get("subsystems") or detected_subsystems
+        final_root_signals = llm_analysis.get("root_cause_signals") or root_signals
+        final_fix_strategies = llm_analysis.get("fix_strategies") or []
+        final_risk_level = llm_analysis.get("risk_level", "medium")
+
+        # Wrap merged results in the dict shapes the rest of the pipeline expects.
+        subsystem_result = {"detected_subsystems": final_subsystems, "confidence": "high"}
+        root_cause_result = {
+            "root_cause_signals": final_root_signals,
+            "root_cause": llm_analysis.get("root_cause", ""),
+            "confidence": llm_analysis.get("confidence", "medium"),
+        }
+        strategy_result = {
+            "fix_strategies": final_fix_strategies,
+            "risk_level": final_risk_level,
+        }
 
         # Step 7: extract comment intelligence
         comment_ids = metadata.get("comment_ids", [])
-
         comment_bodies = []
-
         if comment_ids:
-
             sample_ids = (
                 comment_ids[:3]
-                + comment_ids[len(comment_ids)//2:
-                              len(comment_ids)//2 + 3]
+                + comment_ids[len(comment_ids) // 2: len(comment_ids) // 2 + 3]
                 + comment_ids[-3:]
             )
-
-            comments = self.comment_client.get_multiple_comments(
-                sample_ids
-            )
-
+            comments = self.comment_client.get_multiple_comments(sample_ids)
             comment_bodies = [
-                c["body_html"]
-                for c in comments
-                if c.get("body_html")
+                c["body_html"] for c in comments if c.get("body_html")
             ]
 
-        comment_signal_result = CommentSignalDetector.detect(
-            comment_bodies
-        )
+        comment_signal_result = CommentSignalDetector.detect(comment_bodies)
+
+        # Step 7b: detect MRs from comments + issue body
+        issue_body_html = metadata.get("problem_description_html", "")
+        detected_mrs = self.mr_client.detect_mr_urls_from_issue_body(issue_body_html)
+        detected_mrs += self.mr_client.detect_mr_urls_from_comments(comment_bodies)
+        # Deduplicate
+        seen_mr_keys = set()
+        unique_mrs = []
+        for mr in detected_mrs:
+            key = (mr["project"], mr["mr_iid"])
+            if key not in seen_mr_keys:
+                seen_mr_keys.add(key)
+                unique_mrs.append(mr)
+        detected_mrs = unique_mrs
 
         # Step 8: classify patch lifecycle status
         patch_status = PatchStatusClassifier.classify(
@@ -118,29 +140,19 @@ class IssueForgeServer:
         patch_plan = PatchPlanGenerator.build_plan(
             modified_files,
             modified_functions,
-            detected_subsystems,
-            root_signals
+            final_subsystems,
+            final_root_signals,
         )
 
-        diff_skeleton = DiffSkeletonGenerator.generate(
-            patch_plan
-        )
+        diff_skeleton = DiffSkeletonGenerator.generate(patch_plan)
 
         # Step 10: environment planning
-        env_plan = EnvironmentPlanner.plan(
-            metadata,
-            modified_files,
-            valid_patch_ids
-        )
+        env_plan = EnvironmentPlanner.plan(metadata, modified_files, valid_patch_ids)
 
-        ddev_script = DdevScriptGenerator.generate(
-            env_plan
-        )
+        ddev_script = DdevScriptGenerator.generate(env_plan)
 
         patch_apply_script = None
-
         if env_plan.get("patch_available"):
-
             patch_apply_script = PatchApplyScriptGenerator.generate(
                 env_plan.get("latest_patch_id")
             )
@@ -149,7 +161,6 @@ class IssueForgeServer:
         description_sections = IssueDescriptionParser.extract_sections(
             metadata.get("problem_description_html", "")
         )
-
         reproduction_steps = description_sections.get("steps", [])
 
         # Step 12: build reasoning payload
@@ -174,7 +185,6 @@ class IssueForgeServer:
         )
 
         if not reproduction_script:
-            # Fallback to simple echo script
             reproduction_script = ReproductionScriptGenerator.generate(
                 reproduction_steps
             )
@@ -183,9 +193,7 @@ class IssueForgeServer:
         patch_filename = patch_analysis.get("filename")
         checkout_ref = env_plan.get("checkout_ref", "11.x")
         compatibility_result = PatchBranchDetector.check_compatibility(
-            patch_filename,
-            modified_files,
-            checkout_ref
+            patch_filename, modified_files, checkout_ref
         )
 
         # Step 14: attach extended automation outputs
@@ -195,9 +203,13 @@ class IssueForgeServer:
         context["ddev_script"] = ddev_script
         context["patch_apply_script"] = patch_apply_script
         context["patch_compatibility"] = compatibility_result
-
-        # NEW: attach reproduction pipeline outputs
         context["reproduction_steps"] = reproduction_steps
         context["reproduction_script"] = reproduction_script
+        context["detected_mrs"] = detected_mrs
+        context["llm_analysis"] = {
+            "root_cause": llm_analysis.get("root_cause", ""),
+            "risk_level": final_risk_level,
+            "confidence": llm_analysis.get("confidence", "medium"),
+        }
 
         return context

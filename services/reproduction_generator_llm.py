@@ -1,8 +1,56 @@
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 from services.llm_client import LlmClient
 
 logger = logging.getLogger("IssueForge.ReproductionGeneratorLlm")
+
+# Static Drupal API constraints — sent as a cached system prompt so they are
+# not re-tokenised on every call and do not dilute the issue-specific context.
+_DRUPAL_SYSTEM_PROMPT = """You are a senior Drupal core developer and automation expert.
+
+Your task is to write standalone Drupal PHP scripts executed via `ddev drush scr`.
+
+## Hard rules — violation causes fatal errors
+
+### Module checks
+- ALWAYS use `\\Drupal::moduleHandler()->moduleExists('name')`.
+- NEVER use `isEnabled()`, `getAllModuleData()`, or similar non-existent methods.
+
+### Module installation
+- `\\Drupal::service('module_installer')->install(['name'])` returns a boolean, NOT an array.
+- NEVER pass its return value to `implode()` or iterate over it.
+
+### Paragraphs
+- To create paragraph types: ALWAYS use `\\Drupal\\paragraphs\\Entity\\ParagraphsType::create([...])->save();`
+- To check existence: `\\Drupal\\paragraphs\\Entity\\ParagraphsType::load('bundle_name')`
+- Use `ParagraphsType` (plural). `ParagraphType` (singular) does not exist.
+- NEVER use `NodeType::create()` for paragraph types.
+
+### Paragraph fields
+- Field type MUST be `entity_reference_revisions` (NOT `entity_reference_paragraphs`).
+- In field storage settings: `'target_type' => 'paragraph'`.
+
+### Views
+- For complex views, define in a YAML heredoc and import via:
+  `\\Drupal\\Core\\Serialization\\Yaml::decode($yaml)` + `View::create($values)->save();`
+
+### Text formats
+- Only use core filter plugins: `filter_html`, `filter_align`, `filter_caption`,
+  `filter_html_image_secure`, `filter_autop`, `filter_htmlcorrector`,
+  `filter_html_escape`, `filter_url`, `filter_null`.
+- NEVER reference external module filters (e.g. `filter_linkit`) unless explicitly requested.
+
+### Layout Builder
+- Enable on view display: `$display->setThirdPartySetting('layout_builder', 'enabled', TRUE)->save();`
+- Check if enabled: `$display->getThirdPartySetting('layout_builder', 'enabled')`
+- NEVER use `getRenderer()` or `setComponent('layout_builder', ...)`.
+
+## Output requirements
+- Return ONLY raw PHP starting with `<?php`.
+- NEVER wrap output in markdown code blocks (no ```php).
+- Always guard against duplicate creation: check existence before `create()`.
+- Add `echo "[OK] ..."` lines so the caller can confirm progress.
+"""
 
 
 class ReproductionGeneratorLlm:
@@ -19,56 +67,192 @@ class ReproductionGeneratorLlm:
         modified_files: List[str],
     ) -> str:
         """
-        Dynamically generates a Drupal PHP script to set up the reproduction environment.
+        Generate a reproduction PHP script for the given issue.
+        Returns raw PHP code or empty string on failure.
         """
+        steps_str = (
+            "\n".join(f"- {step}" for step in reproduction_steps)
+            if reproduction_steps
+            else "No explicit steps provided — infer from the problem summary."
+        )
 
-        steps_str = "\n".join([f"- {step}" for step in reproduction_steps])
-        subsystems_str = ", ".join(detected_subsystems)
-        files_str = ", ".join(modified_files)
+        user_prompt = f"""Write a standalone Drupal PHP script (`ddev drush scr`) that programmatically
+sets up the exact database state (content types, fields, content, views, configs) needed
+to reproduce the bug described below.
 
-        prompt = f"""You are a senior Drupal core developer and automation expert.
-Your task is to write a standalone Drupal PHP script (to be executed via `ddev drush scr setup_reproduction.php`) that programmatically sets up the exact database configuration, content types, vocabularies, fields, mock content, and Views required to reproduce the bug described below.
-
-### Issue Information:
+### Issue
 - **Title**: {issue_title}
-- **Subsystems**: {subsystems_str}
-- **Affected Files**: {files_str}
-- **Problem Summary**: {problem_summary}
+- **Subsystems**: {", ".join(detected_subsystems)}
+- **Affected Files**: {", ".join(modified_files)}
 
-### Reproduction Steps:
+### Problem
+{problem_summary}
+
+### Steps to reproduce
 {steps_str}
 
-### Instructions for the PHP script:
-1. Write standard Drupal API code (compatible with Drupal 10/11) to create nodes, fields, content types, views, taxonomies, or configs needed to reproduce this issue.
-2. Use standard Drupal APIs (e.g., `NodeType::create()`, `FieldStorageConfig::create()`, `FieldConfig::create()`, `Node::create()`, `View::create()`).
-3. Always verify if entities/views/fields already exist before creating them to avoid duplicate creation errors.
-4. For Paragraphs: To create paragraph types/bundles, do NOT use `NodeType::create()`, and do NOT import or use `ParagraphType` (singular, which does not exist). Instead, always use `\Drupal\paragraphs\Entity\ParagraphsType::create(['id' => 'bundle_name', 'label' => 'Bundle Name'])->save();`. Check if they exist using `\Drupal\paragraphs\Entity\ParagraphsType::load('bundle_name')`. Make sure to import/use `Drupal\paragraphs\Entity\ParagraphsType` (plural).
-5. For Paragraph fields: The field type must be `entity_reference_revisions` (NOT `entity_reference_paragraphs` which does not exist). In the field storage config settings, set `'target_type' => 'paragraph'`.
-6. To check if a module is installed/enabled, ALWAYS use ONLY `\Drupal::moduleHandler()->moduleExists('module_name')`. Do NOT use `isEnabled()`, `getAllModuleData()`, or any other non-existent or internal methods.
-7. For complex configurations like Views, define them in a YAML heredoc and import them via `\Drupal\Core\Serialization\Yaml::decode($yaml_content)` and `View::create($values)->save()`.
-8. For text formats/filters: Do NOT hardcode or configure settings/filters that belong to external modules (like 'filter_linkit') unless that module is explicitly requested or enabled. Stick to core filter plugins: 'filter_html', 'filter_align', 'filter_caption', 'filter_html_image_secure', 'filter_autop', 'filter_htmlcorrector', 'filter_html_escape', 'filter_url', 'filter_null'.
-9. The view configuration should expose filters, configure sorting, display mode, or whatever is specified in the steps. Make sure the exposed path is unique (e.g. `/issue-test-view`).
-10. Do NOT include any markdown code blocks (like ```php or ```) in your output.
-11. Return ONLY the raw PHP code starting with `<?php`.
-12. When installing modules using `\Drupal::service('module_installer')->install(['module_name'])`, keep in mind that this method returns a boolean (TRUE on success, FALSE on failure), NOT an array of enabled modules. Do NOT attempt to pass its return value to functions like `implode` or treat it as an array.
-13. For Layout Builder: To check if Layout Builder is enabled on a view display, use `$view_display_node->getThirdPartySetting('layout_builder', 'enabled')`. To enable Layout Builder on a view display, use `$view_display_node->setThirdPartySetting('layout_builder', 'enabled', TRUE)->save();`. Do NOT use `getRenderer()` or `setComponent('layout_builder', ...)` which will throw fatal errors.
-
-Generate the complete PHP script below:
+### Script requirements
+1. Use Drupal 10/11-compatible APIs.
+2. Check existence before creating every entity, field, view, or config.
+3. Use exposed view path `/issue-{issue_title[:30].lower().replace(" ", "-")}-test` (unique).
+4. Print `[OK] <action>` for each major step so output is verifiable.
+5. Return ONLY raw PHP starting with `<?php` — no markdown, no explanation.
 """
 
-        generated_code = LlmClient.generate(prompt)
+        generated = LlmClient.generate(user_prompt, system=_DRUPAL_SYSTEM_PROMPT)
 
-        # Post-process to remove markdown formatting if the LLM still wraps it
-        if not generated_code:
+        if not generated:
             return ""
 
-        # Remove leading/trailing markdown wrapper lines if present
-        lines = generated_code.splitlines()
-        cleaned_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("```php") or stripped.startswith("```"):
-                continue
-            cleaned_lines.append(line)
+        return ReproductionGeneratorLlm._clean_output(generated)
 
-        return "\n".join(cleaned_lines).strip()
+    @staticmethod
+    def fix_script(
+        broken_script: str,
+        error_output: str,
+        issue_title: str,
+        attempt: int,
+    ) -> str:
+        """
+        Feed a broken script + its error output back to the LLM to get a fixed version.
+        Called by the self-healing loop in reproduce_with_healing.py.
+        """
+        user_prompt = f"""The following Drupal PHP script (for issue: "{issue_title}") failed on attempt {attempt}.
+
+### Error output
+```
+{error_output.strip()[:3000]}
+```
+
+### Broken script
+```php
+{broken_script.strip()[:6000]}
+```
+
+Fix the script so it runs without errors under `ddev drush scr`.
+Apply the Drupal API rules from your system prompt.
+Return ONLY the corrected raw PHP starting with `<?php`.
+"""
+        fixed = LlmClient.generate(user_prompt, system=_DRUPAL_SYSTEM_PROMPT)
+        if not fixed:
+            return ""
+        return ReproductionGeneratorLlm._clean_output(fixed)
+
+    @staticmethod
+    def _clean_output(code: str) -> str:
+        lines = code.splitlines()
+        cleaned = [
+            line for line in lines
+            if not line.strip().startswith("```")
+        ]
+        return "\n".join(cleaned).strip()
+
+    # ------------------------------------------------------------------
+    # Verification guide
+    # ------------------------------------------------------------------
+
+    _GUIDE_SYSTEM_PROMPT = """\
+You are a senior Drupal developer writing a step-by-step guide to help a developer
+see a bug in their browser after the test environment has been set up.
+
+Rules:
+- Write numbered steps. Each step has: URL (if navigating), Action (what to do),
+  Observe (what the bug looks like — be specific: error text, missing element, wrong value).
+- Use the EXACT site URL provided — include it in every navigation step.
+- Include admin login credentials: username admin, password admin.
+- Include at least one step pointing to /admin/reports/dblog (Drupal error log).
+- Include a terminal command tip for checking watchdog logs via Drush.
+- If the issue involves JavaScript, mention opening DevTools → Console.
+- Keep each step to 3-4 lines. No padding or generic advice.
+- Plain text output only — no markdown headers, no bullet symbols, numbered steps only."""
+
+    @staticmethod
+    def generate_verification_guide(
+        issue_id: str,
+        issue_title: str,
+        site_url: str,
+        reproduction_steps: List[str],
+        subsystems: Optional[List[str]] = None,
+        problem_summary: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a numbered, browser-ready guide showing exactly how to see the bug.
+
+        Args:
+            issue_id: Drupal issue ID (for display).
+            issue_title: Human-readable issue title.
+            site_url: Full DDEV site URL, e.g. https://env-12345.ddev.site
+            reproduction_steps: Raw steps extracted from the issue.
+            subsystems: Involved Drupal subsystems (e.g. ['views', 'paragraphs']).
+            problem_summary: Short description of what the bug is.
+
+        Returns:
+            Formatted multi-line guide string, or a minimal fallback if LLM fails.
+        """
+        steps_text = (
+            "\n".join(f"{i+1}. {s}" for i, s in enumerate(reproduction_steps))
+            if reproduction_steps
+            else "No explicit steps provided — infer from the issue description."
+        )
+        subs = ", ".join(subsystems) if subsystems else "general"
+
+        prompt = (
+            f"Issue #{issue_id}: {issue_title}\n"
+            f"Subsystems: {subs}\n"
+            f"Problem: {problem_summary or issue_title}\n\n"
+            f"Site URL: {site_url}\n"
+            f"Admin credentials: admin / admin\n\n"
+            f"Reproduction steps from the issue:\n{steps_text}\n\n"
+            "Write a numbered guide (5-8 steps) showing exactly where to go and what to "
+            "look at in the browser to observe the bug. Include log-checking steps."
+        )
+
+        guide = LlmClient.generate(prompt, system=ReproductionGeneratorLlm._GUIDE_SYSTEM_PROMPT)
+        if guide:
+            return guide
+
+        # Minimal fallback when LLM is unavailable
+        lines = [
+            f"1. Open {site_url}/user/login and log in as admin / admin",
+            f"2. Follow the reproduction steps below:",
+        ]
+        for i, step in enumerate(reproduction_steps, 3):
+            lines.append(f"   {i-2}. {step}")
+        lines += [
+            f"{len(reproduction_steps)+3}. Check {site_url}/admin/reports/dblog for PHP errors",
+            "   Terminal: cd <env_path> && ddev drush watchdog:show --count=20",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_verification_guide(
+        issue_id: str,
+        issue_title: str,
+        site_url: str,
+        guide_text: str,
+        env_path: str = "",
+    ) -> str:
+        """Wrap the LLM guide in a terminal-friendly box."""
+        W = 65
+        sep = "=" * W
+        lines = [
+            "",
+            sep,
+            f"  HOW TO VERIFY THE BUG  —  #{issue_id}",
+            sep,
+            f"",
+            f"  Site   : {site_url}",
+            f"  Login  : admin / admin",
+            f"  Logs   : {site_url}/admin/reports/dblog",
+        ]
+        if env_path:
+            lines.append(
+                f"  Drush  : cd {env_path} && ddev drush watchdog:show --count=20"
+            )
+        lines += ["", "  Steps:", ""]
+
+        for line in guide_text.splitlines():
+            lines.append(f"  {line}")
+
+        lines += ["", sep]
+        return "\n".join(lines)

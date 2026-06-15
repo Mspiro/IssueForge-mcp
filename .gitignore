@@ -25,3 +25,12 @@ setup_reproduction.php
 
 # DDEV files inside specific environments
 .ddev/
+
+# Generated analysis output files
+env_plan*.json
+
+# Logs
+logs/
+
+# Claude Code workspace files
+.claude/

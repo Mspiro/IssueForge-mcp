@@ -43,7 +43,8 @@ class IssueDescriptionParser:
             for match in re.finditer(
                 pattern, description_html, re.DOTALL | re.IGNORECASE
             ):
-                title = re.sub(r"<.*?>", "", match.group(2)).strip().lower()
+                group_idx = 2 if is_hx else 1
+                title = re.sub(r"<.*?>", "", match.group(group_idx)).strip().lower()
                 found_headings.append({
                     "start": match.start(),
                     "end": match.end(),

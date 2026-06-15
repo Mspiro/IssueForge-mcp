@@ -120,6 +120,50 @@ class PatchApplier:
             }
 
     @staticmethod
+    def apply_patch_file(env_path: str, patch_path: str) -> Dict:
+        """
+        Apply a patch from a local file path (not a remote patch_id).
+        Used by apply_mr.py which already has the diff on disk.
+        """
+        if not os.path.exists(patch_path):
+            return {"success": False, "message": f"Patch file not found: {patch_path}"}
+
+        patch_filename = os.path.basename(patch_path)
+        apply_cwd = PatchApplier._get_apply_cwd(env_path, patch_path)
+
+        strategies = [
+            ([], "default"),
+            (["--ignore-whitespace"], "ignore-whitespace"),
+            (["--3way"], "3way"),
+            (["--ignore-whitespace", "--3way"], "combined"),
+        ]
+
+        # Find clean strategy
+        winning_args = None
+        for args, name in strategies:
+            check = subprocess.run(
+                ["git", "apply"] + args + ["--check", patch_path],
+                cwd=apply_cwd, capture_output=True, text=True,
+            )
+            if check.returncode == 0:
+                winning_args = args
+                break
+
+        if winning_args is None:
+            return {"success": False, "message": "Patch cannot be applied cleanly with any strategy."}
+
+        result = subprocess.run(
+            ["git", "apply"] + winning_args + [patch_path],
+            cwd=apply_cwd, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return {"success": False, "message": result.stdout + result.stderr}
+
+        # Cache rebuild
+        subprocess.run(["ddev", "drush", "cr"], cwd=env_path, capture_output=True, text=True)
+        return {"success": True, "message": f"Applied {patch_filename} successfully."}
+
+    @staticmethod
     def apply_patch(env_path: str, patch_id: str) -> Dict:
         """
         Applies the patch using the resolved clean strategy and rebuilds the Drupal cache.

@@ -58,10 +58,26 @@ def clone_or_update(install_dir):
 def install_dependencies(install_dir):
     print("Installing Python dependencies...")
     venv_dir = os.path.join(install_dir, "venv")
-    run([sys.executable, "-m", "venv", venv_dir])
-    pip = os.path.join(venv_dir, "bin", "pip") if os.name != "nt" else os.path.join(venv_dir, "Scripts", "pip")
-    run([pip, "install", "-q", "-r", os.path.join(install_dir, "requirements.txt")])
-    return os.path.join(venv_dir, "bin", "python") if os.name != "nt" else os.path.join(venv_dir, "Scripts", "python")
+    is_win = os.name == "nt"
+    pip_path = os.path.join(venv_dir, "Scripts" if is_win else "bin", "pip")
+    python_path = os.path.join(venv_dir, "Scripts" if is_win else "bin", "python")
+
+    if not os.path.exists(pip_path):
+        # Try standard venv first
+        result = subprocess.run([sys.executable, "-m", "venv", venv_dir], check=False)
+        if result.returncode != 0 or not os.path.exists(pip_path):
+            # Fallback for Debian/Ubuntu where python3-venv may be missing
+            print("  Standard venv unavailable — bootstrapping pip manually...")
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv_dir], check=True)
+            import urllib.request
+            get_pip = os.path.join(install_dir, "_get_pip.py")
+            urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip)
+            subprocess.run([python_path, get_pip, "--quiet"], check=True)
+            os.remove(get_pip)
+
+    subprocess.run([pip_path, "install", "-q", "-r",
+                    os.path.join(install_dir, "requirements.txt")], check=True)
+    return python_path
 
 
 def run_credential_setup(install_dir, python_bin):

@@ -37,6 +37,21 @@ Then ask the user:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/analyze_issue.py <URL> 2>/dev/null > env_plan_<ID>.json
 ```
+After running, read the plan file so you know what's in it:
+```
+! cat env_plan_<ID>.json
+```
+From the JSON, note:
+- `reproduction_steps` — the structured steps extracted from the issue description
+- `llm_analysis.root_cause` — the detected root cause
+- `environment_plan` — branch, PHP version, modules needed
+
+Show the user a brief summary:
+- **Root cause**: what the analysis found
+- **Reproduction steps**: list them clearly (if `reproduction_steps` is empty, derive steps from the issue problem description and proposed resolution you already read in Step 1)
+- **Environment**: branch, PHP version, any contrib modules
+
+Then ask: proceed to provision + reproduce [y], or different issue [n]?
 
 ### Step 3 — Provision environment
 ```
@@ -45,9 +60,9 @@ Then ask the user:
 Clones Drupal, starts DDEV, installs modules. Takes 3-5 minutes.
 
 ### Step 4 — Reproduce the bug
-Write a PHP reproduction script based on the env_plan analysis, then run it:
+Using the `reproduction_steps` from the env_plan (or your own derivation from Step 2), write a PHP Drush script that programmatically triggers the bug. Save it as `repro_<ID>.php`, then run it:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> <script.php> \
+! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> repro_<ID>.php \
     --issue-title "<TITLE>" --env-plan env_plan_<ID>.json
 ```
 On success: site is at `https://env-<ID>.ddev.site` (admin / admin).

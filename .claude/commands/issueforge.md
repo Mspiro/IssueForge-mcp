@@ -16,7 +16,11 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/preview_issue.py <URL_OR_ID>
 ```
-Shows: title, status, patches, MRs. Then ask the user: proceed with full flow [y], analysis only [a], or different issue [n]?
+Shows: title, status, patches, MRs.
+After running, briefly summarize what you see (title, status, key patches/MRs) and ask the user:
+- [y] Full flow — analyze + provision environment + reproduce
+- [a] Analysis only — see detailed plan first, then decide
+- [n] Different issue
 
 ### Step 2 — Analyze (writes env_plan_<ID>.json)
 ```

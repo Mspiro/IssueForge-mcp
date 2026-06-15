@@ -1,34 +1,11 @@
 """
 Central configuration for IssueForge.
 
-All magic values (model names, timeouts, retry counts) live here so they
+All magic values (timeouts, retry counts) live here so they
 are easy to find, change, and override via environment variables.
 """
 
 import os
-
-# ---------------------------------------------------------------------------
-# LLM
-# ---------------------------------------------------------------------------
-
-LLM_PRIMARY_MODEL_ANTHROPIC = os.getenv(
-    "ISSUEFORGE_ANTHROPIC_MODEL", "claude-sonnet-4-5"
-)
-LLM_PRIMARY_MODEL_GEMINI = os.getenv(
-    "ISSUEFORGE_GEMINI_MODEL", "gemini-2.5-flash"
-)
-LLM_FALLBACK_MODEL_GEMINI = os.getenv(
-    "ISSUEFORGE_GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite"
-)
-LLM_PRIMARY_MODEL_OPENAI = os.getenv(
-    "ISSUEFORGE_OPENAI_MODEL", "gpt-4o"
-)
-
-LLM_MAX_TOKENS = int(os.getenv("ISSUEFORGE_LLM_MAX_TOKENS", "8096"))
-LLM_TEMPERATURE = float(os.getenv("ISSUEFORGE_LLM_TEMPERATURE", "0.2"))
-LLM_TIMEOUT_ANTHROPIC = int(os.getenv("ISSUEFORGE_LLM_TIMEOUT_ANTHROPIC", "120"))
-LLM_TIMEOUT_GEMINI = int(os.getenv("ISSUEFORGE_LLM_TIMEOUT_GEMINI", "120"))
-LLM_TIMEOUT_OPENAI = int(os.getenv("ISSUEFORGE_LLM_TIMEOUT_OPENAI", "60"))
 
 # ---------------------------------------------------------------------------
 # Drupal.org API

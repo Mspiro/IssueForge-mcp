@@ -16,12 +16,11 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/preview_issue.py <URL_OR_ID>
 ```
-Shows: title, status, patches, MRs, discussion summary.
-Then ask the user: proceed with full flow [y], analysis only [a], or different issue [n]?
+Shows: title, status, patches, MRs. Then ask the user: proceed with full flow [y], analysis only [a], or different issue [n]?
 
 ### Step 2 — Analyze (writes env_plan_<ID>.json)
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/analyze_issue.py <URL> > env_plan_<ID>.json
+! python {{ISSUEFORGE_DIR}}/scripts/analyze_issue.py <URL> 2>/dev/null > env_plan_<ID>.json
 ```
 
 ### Step 3 — Provision environment
@@ -31,11 +30,13 @@ Then ask the user: proceed with full flow [y], analysis only [a], or different i
 Clones Drupal, starts DDEV, installs modules. Takes 3-5 minutes.
 
 ### Step 4 — Reproduce the bug
+Write a PHP reproduction script based on the env_plan analysis, then run it:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> setup_reproduction.php \
+! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> <script.php> \
     --issue-title "<TITLE>" --env-plan env_plan_<ID>.json
 ```
-After success, prints a step-by-step browser guide showing where to go to see the bug.
+On success: site is at `https://env-<ID>.ddev.site` (admin / admin).
+Tell the user exactly where to go and what to look for to observe the bug.
 
 ### Step 5 — Apply and validate a patch or MR
 
@@ -53,12 +54,6 @@ Apply all MRs from the plan:
 ```
 Each run: applies diff → regression check (health + PHPUnit + compatibility) → shows diff stat → offers push or patch upload.
 
-### Step 6 — Generate a fix (when issue is unresolved)
-```
-! python {{ISSUEFORGE_DIR}}/scripts/generate_fix.py <ISSUE_ID> env_plan_<ID>.json
-```
-Generates a fix plan, shows it to the user, applies code changes, runs PHPCS/PHPStan/PHPUnit with self-healing, then offers to submit.
-
 ---
 
 ## Credentials
@@ -69,5 +64,4 @@ Stored in `~/.issueforge/credentials`. Run once to configure:
 
 ## Troubleshooting
 - DDEV port conflict → run `! ddev poweroff`
-- PHP syntax error in reproduction script → `reproduce_with_healing.py` auto-corrects via LLM
 - Patch won't apply → `apply_mr.py` tries 4 strategies automatically

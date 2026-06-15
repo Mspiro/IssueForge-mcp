@@ -14,20 +14,6 @@ from services.drupal_api_client import DrupalAPIClient
 from services.drupal_comment_client import DrupalCommentClient
 from services.drupal_patch_client import DrupalPatchClient
 from services.gitlab_mr_client import GitlabMrClient
-from services.llm_client import LlmClient
-
-_DISCUSSION_SYSTEM_PROMPT = """\
-You are a senior Drupal core contributor reading a bug-tracker discussion.
-Given raw comment text from a Drupal.org issue thread, write a concise
-bullet-point summary (5-10 bullets) covering:
-
-• The core problem and its impact
-• Key observations or evidence from contributors
-• Proposed approaches or fixes discussed
-• Any consensus reached, or remaining blockers
-• Whether an MR or patch is considered ready for review
-
-Be factual and terse. Omit greetings and signatures. Output plain text bullets only."""
 
 
 class IssuePreviewer:
@@ -69,7 +55,7 @@ class IssuePreviewer:
             except Exception:
                 patches.append({"id": fid, "filename": f"patch-{fid}", "size": 0, "url": ""})
 
-        # --- Comments — sample for MR detection + discussion summary ---
+        # --- Comments — sample for MR detection ---
         comment_ids = meta.get("comment_ids", [])
         if comment_ids:
             n = len(comment_ids)
@@ -106,11 +92,6 @@ class IssuePreviewer:
                     "target_branch": details.get("target_branch", ""),
                 })
 
-        # --- Discussion summary via LLM ---
-        discussion_summary = IssuePreviewer._summarize_discussion(
-            meta.get("title", ""), comment_bodies
-        )
-
         return {
             "issue_id": meta["issue_id"],
             "issue_url": meta.get("issue_url", issue_url),
@@ -126,32 +107,7 @@ class IssuePreviewer:
             "total_comments": total_comments,
             "patches": patches,
             "detected_mrs": unique_mrs,
-            "discussion_summary": discussion_summary,
         }
-
-    @staticmethod
-    def _summarize_discussion(issue_title: str, comment_bodies: list) -> str:
-        if not comment_bodies:
-            return "No comments available."
-        plain = []
-        for body in comment_bodies:
-            text = re.sub(r"<[^>]+>", " ", body)
-            text = html.unescape(text).strip()
-            text = re.sub(r"\s+", " ", text)
-            if text:
-                plain.append(text[:1000])
-        if not plain:
-            return "No comments available."
-
-        user_prompt = (
-            f"Issue: {issue_title}\n\n"
-            + "\n\n---\n\n".join(plain[:12])
-        )
-        try:
-            return LlmClient.generate(user_prompt, system=_DISCUSSION_SYSTEM_PROMPT) or \
-                "Could not summarise discussion."
-        except Exception:
-            return "Discussion summary unavailable (LLM error)."
 
     @staticmethod
     def format_analysis_summary(plan: dict) -> str:
@@ -268,10 +224,6 @@ class IssuePreviewer:
             lines.append("    None detected")
         lines.append("")
 
-        lines.append("  Discussion summary:")
-        for line in preview.get("discussion_summary", "").splitlines():
-            lines.append(f"    {line}")
-        lines.append("")
         lines.append(sep)
 
         return "\n".join(lines)

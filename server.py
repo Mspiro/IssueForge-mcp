@@ -16,7 +16,6 @@ from classifiers.fix_strategy_generator import FixStrategyGenerator
 from classifiers.comment_signal_detector import CommentSignalDetector
 from classifiers.patch_status_classifier import PatchStatusClassifier
 from classifiers.patch_plan_generator import PatchPlanGenerator
-from classifiers.llm_analyzer import LlmAnalyzer
 from services.gitlab_mr_client import GitlabMrClient
 
 
@@ -66,40 +65,14 @@ class IssueForgeServer:
         )
         root_signals = root_cause_result["root_cause_signals"]
 
-        # Step 6: LLM-enhanced analysis — runs when heuristics have low coverage
-        #         (< 2 subsystems or < 1 root cause signal) or always for
-        #         richer strategies.  Falls back to heuristics if LLM fails.
-        description_sections_early = IssueDescriptionParser.extract_sections(
-            metadata.get("problem_description_html", "")
+        # Step 6: heuristic fix strategies
+        strategy_result = FixStrategyGenerator.generate(
+            detected_subsystems, root_signals
         )
-        problem_summary_for_llm = description_sections_early.get("problem", "")
-
-        llm_analysis = LlmAnalyzer.analyze(
-            issue_title=metadata.get("title", ""),
-            problem_summary=problem_summary_for_llm,
-            modified_files=modified_files,
-            modified_functions=modified_functions,
-            preliminary_subsystems=detected_subsystems,
-            preliminary_root_cause_signals=root_signals,
-        )
-
-        # Merge: LLM result takes precedence, heuristics fill any gaps.
-        final_subsystems = llm_analysis.get("subsystems") or detected_subsystems
-        final_root_signals = llm_analysis.get("root_cause_signals") or root_signals
-        final_fix_strategies = llm_analysis.get("fix_strategies") or []
-        final_risk_level = llm_analysis.get("risk_level", "medium")
-
-        # Wrap merged results in the dict shapes the rest of the pipeline expects.
-        subsystem_result = {"detected_subsystems": final_subsystems, "confidence": "high"}
-        root_cause_result = {
-            "root_cause_signals": final_root_signals,
-            "root_cause": llm_analysis.get("root_cause", ""),
-            "confidence": llm_analysis.get("confidence", "medium"),
-        }
-        strategy_result = {
-            "fix_strategies": final_fix_strategies,
-            "risk_level": final_risk_level,
-        }
+        final_subsystems = detected_subsystems
+        final_root_signals = root_signals
+        final_fix_strategies = strategy_result.get("fix_strategies", [])
+        final_risk_level = strategy_result.get("risk_level", "medium")
 
         # Step 7: extract comment intelligence
         comment_ids = metadata.get("comment_ids", [])
@@ -174,20 +147,10 @@ class IssueForgeServer:
             patch_status,
         )
 
-        # Step 13: dynamic LLM reproduction script generation
-        from services.reproduction_generator_llm import ReproductionGeneratorLlm
-        reproduction_script = ReproductionGeneratorLlm.generate_script(
-            issue_title=context.get("issue_title", ""),
-            problem_summary=context.get("problem_summary", ""),
-            reproduction_steps=reproduction_steps,
-            detected_subsystems=context.get("detected_subsystems", []),
-            modified_files=context.get("modified_files", []),
+        # Step 13: heuristic reproduction script from parsed steps
+        reproduction_script = ReproductionScriptGenerator.generate(
+            reproduction_steps
         )
-
-        if not reproduction_script:
-            reproduction_script = ReproductionScriptGenerator.generate(
-                reproduction_steps
-            )
 
         # Check patch branch compatibility
         patch_filename = patch_analysis.get("filename")
@@ -207,9 +170,9 @@ class IssueForgeServer:
         context["reproduction_script"] = reproduction_script
         context["detected_mrs"] = detected_mrs
         context["llm_analysis"] = {
-            "root_cause": llm_analysis.get("root_cause", ""),
+            "root_cause": root_cause_result.get("root_cause", ""),
             "risk_level": final_risk_level,
-            "confidence": llm_analysis.get("confidence", "medium"),
+            "confidence": root_cause_result.get("confidence", "medium"),
         }
 
         return context

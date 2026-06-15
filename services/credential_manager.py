@@ -2,27 +2,14 @@
 Credential manager for IssueForge.
 
 Credentials are stored in ~/.issueforge/credentials — user home directory,
-never the project directory.  This means:
-  - They are found regardless of where you run the scripts from.
-  - They persist across project re-clones or working-directory changes.
-  - A single set of credentials is shared across all issues.
+never the project directory.
 
-Prompting happens ONLY from scripts/setup.py (one-time setup).
-All other scripts (analyze_issue.py, provision_env.py, etc.) load
-credentials silently and NEVER prompt.  If credentials are absent they
-log a hint and continue with graceful degradation.
-
-Credentials managed:
-  GITLAB_TOKEN         — GitLab PAT from git.drupalcode.org (optional)
-  GIT_USER_NAME        — Name for git commits/branches in provisioned envs
-  GIT_USER_EMAIL       — Email for git commits/branches in provisioned envs
-  DRUPAL_ORG_USERNAME  — Drupal.org username (for uploading patches)
-  DRUPAL_ORG_PASSWORD  — Drupal.org password (for uploading patches)
+Setup only asks for one thing: the GitLab Personal Access Token.
+Name and email are derived automatically from the GitLab API.
 """
 
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv, set_key
@@ -51,35 +38,21 @@ def _persist(key: str, value: str):
 
 
 def is_setup_complete() -> bool:
-    """Return True if the minimum required credentials (git identity) are saved."""
-    return bool(
-        os.getenv("GIT_USER_NAME", "").strip()
-        and os.getenv("GIT_USER_EMAIL", "").strip()
-    )
+    """Return True if the GitLab token has been saved."""
+    return bool(os.getenv("GITLAB_TOKEN", "").strip())
 
 
 def get_credentials() -> dict:
-    """
-    Return all credentials from the store.  Never prompts.
-    Missing values are returned as empty strings; callers degrade gracefully.
-    """
+    """Return all credentials from the store. Never prompts."""
     token = os.getenv("GITLAB_TOKEN", "").strip()
     name = os.getenv("GIT_USER_NAME", "").strip()
     email = os.getenv("GIT_USER_EMAIL", "").strip()
-    drupal_user = os.getenv("DRUPAL_ORG_USERNAME", "").strip()
-    drupal_pass = os.getenv("DRUPAL_ORG_PASSWORD", "").strip()
-
-    if not name or not email:
-        logger.warning(
-            "Git identity not configured. Run `python scripts/setup.py` to set it up."
-        )
-
     return {
         "gitlab_token": token,
         "git_name": name or "IssueForge User",
         "git_email": email or "issueforge@example.com",
-        "drupal_username": drupal_user,
-        "drupal_password": drupal_pass,
+        "drupal_username": "",
+        "drupal_password": "",
     }
 
 
@@ -87,22 +60,11 @@ def get_credentials() -> dict:
 # Validation helpers
 # ---------------------------------------------------------------------------
 
-def _validate_drupal_credentials(username: str, password: str) -> tuple:
-    """
-    Call the Drupal.org REST API to verify username + password.
-    Returns (True, message) or (False, reason).
-    """
-    try:
-        from services.drupal_patch_uploader import DrupalPatchUploader
-        return DrupalPatchUploader.validate_credentials(username, password)
-    except Exception as e:
-        return False, f"Could not validate Drupal.org credentials: {e}"
-
-
 def _validate_gitlab_token(token: str) -> tuple:
     """
-    Call the GitLab API to verify the token.
-    Returns (True, "Authenticated as <username>") or (False, "<reason>").
+    Validate the token against the GitLab API.
+    Returns (True, user_info_dict) or (False, error_string).
+    user_info_dict has keys: username, name, email.
     """
     try:
         import requests
@@ -112,17 +74,17 @@ def _validate_gitlab_token(token: str) -> tuple:
             timeout=10,
         )
         if resp.status_code == 200:
-            username = resp.json().get("username", "unknown")
-            return True, f"Authenticated as @{username}"
+            data = resp.json()
+            return True, {
+                "username": data.get("username", ""),
+                "name": data.get("name", ""),
+                "email": data.get("email", ""),
+            }
         if resp.status_code == 401:
             return False, "Invalid or expired token (401 Unauthorized)."
         return False, f"GitLab API returned {resp.status_code}."
     except Exception as e:
         return False, f"Could not reach GitLab API: {e}"
-
-
-def _is_valid_email(email: str) -> bool:
-    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
 
 
 # ---------------------------------------------------------------------------
@@ -145,69 +107,19 @@ def _prompt(prompt_text: str, secret: bool = False) -> str:
 
 def run_interactive_setup(force: bool = False) -> dict:
     """
-    Collect and validate all credentials interactively, then save them to
-    ~/.issueforge/credentials.  Called only by scripts/setup.py.
-
-    Each credential is validated before saving.  If validation fails the
-    user is re-prompted and always has the option to skip.
-
-    Args:
-        force: If True, re-prompt even if credentials already exist.
+    Ask only for the GitLab token. Name and email are auto-derived from it.
+    Called only by scripts/setup.py.
     """
     print("\n" + "=" * 55)
-    print("  IssueForge — First-Time Setup")
-    print("  Credentials saved to:", CREDENTIALS_FILE)
-    print("=" * 55 + "\n")
-
-    # ----------------------------------------------------------------
-    # Git name (required for authoring commits / PRs)
-    # ----------------------------------------------------------------
-    print("Git identity — used to author branches/commits in provisioned")
-    print("environments. This becomes the PR author on Drupal.org.\n")
-
-    current_name = os.getenv("GIT_USER_NAME", "").strip()
-    if current_name and not force:
-        print(f"  Git name  : {current_name}  (already set — press Enter to keep)")
-
-    while True:
-        name = _prompt(f"  Your full name [{current_name or 'e.g. Jane Smith'}]: ") or current_name
-        if name:
-            _persist("GIT_USER_NAME", name)
-            break
-        ans = _prompt("  No name entered. Continue without one? [y/N]: ")
-        if ans.lower() in ("y", "yes"):
-            print("  Skipping — commits will use a generic author name.")
-            break
-
-    # ----------------------------------------------------------------
-    # Git email (required for authoring commits / PRs)
-    # ----------------------------------------------------------------
-    current_email = os.getenv("GIT_USER_EMAIL", "").strip()
-    if current_email and not force:
-        print(f"  Git email : {current_email}  (already set — press Enter to keep)")
-
-    while True:
-        email = _prompt(f"  Your email [{current_email or 'e.g. jane@example.com'}]: ") or current_email
-        if not email:
-            ans = _prompt("  No email entered. Continue without one? [y/N]: ")
-            if ans.lower() in ("y", "yes"):
-                print("  Skipping — commits will use a generic author email.")
-                break
-            continue
-        if not _is_valid_email(email):
-            print(f"  ✗ '{email}' is not a valid email address. Try again.")
-            email = ""
-            continue
-        _persist("GIT_USER_EMAIL", email)
-        break
-
-    # ----------------------------------------------------------------
-    # GitLab PAT (optional — enables MR detection + higher rate limits)
-    # ----------------------------------------------------------------
-    print("\nGitLab Personal Access Token — enables MR detection and higher")
-    print("API rate limits.  Optional: press Enter to skip.\n")
-    print("  Create one at: https://git.drupalcode.org/-/user_settings/personal_access_tokens")
-    print("  Required scope: read_api\n")
+    print("  IssueForge — Setup")
+    print("=" * 55)
+    print()
+    print("  You need a GitLab Personal Access Token from git.drupalcode.org")
+    print("  to use IssueForge. It enables MR detection and push access.")
+    print()
+    print("  Create one here (scope: read_api):")
+    print("  https://git.drupalcode.org/-/user_settings/personal_access_tokens")
+    print()
 
     current_token = os.getenv("GITLAB_TOKEN", "").strip()
     if current_token and not force:
@@ -218,78 +130,38 @@ def run_interactive_setup(force: bool = False) -> dict:
         print(f"  Token already set ({masked}) — press Enter to keep.")
 
     while True:
-        token = _prompt("  GitLab PAT (hidden): ", secret=True)
+        token = _prompt("  GitLab token (hidden): ", secret=True)
         if not token:
             token = current_token if not force else ""
         if not token:
-            print("  Skipping — MR detection will use the public API only.")
+            print("  No token entered. Run setup again when you have one.")
+            print("  MR detection and push will not be available.")
             break
 
         print("  Validating…", end=" ", flush=True)
-        valid, message = _validate_gitlab_token(token)
+        valid, result = _validate_gitlab_token(token)
         if valid:
-            print(f"✓ {message}")
+            name = result.get("name", "")
+            email = result.get("email", "")
+            username = result.get("username", "")
+            print(f"OK — logged in as @{username}")
             _persist("GITLAB_TOKEN", token)
+            if name:
+                _persist("GIT_USER_NAME", name)
+                print(f"  Name  : {name}")
+            if email:
+                _persist("GIT_USER_EMAIL", email)
+                print(f"  Email : {email}")
             break
         else:
-            print(f"\n  ✗ {message}")
+            print(f"\n  ✗ {result}")
             ans = _prompt("  Try a different token? [y/N]: ")
             if ans.lower() not in ("y", "yes"):
-                print("  Continuing without GitLab token.")
+                print("  Setup cancelled.")
                 break
 
-    # ----------------------------------------------------------------
-    # Drupal.org credentials (optional — needed for patch upload)
-    # ----------------------------------------------------------------
-    print("\nDrupal.org account — needed to upload patch files directly to")
-    print("the issue page.  Optional: press Enter to skip.\n")
-    print("  Your account at: https://www.drupal.org/user\n")
-
-    current_drupal_user = os.getenv("DRUPAL_ORG_USERNAME", "").strip()
-    if current_drupal_user and not force:
-        print(f"  Username already set ({current_drupal_user}) — press Enter to keep.")
-
-    drupal_user = (
-        _prompt(f"  Drupal.org username [{current_drupal_user or 'e.g. janedrupal'}]: ")
-        or current_drupal_user
-    )
-
-    if drupal_user:
-        current_drupal_pass = os.getenv("DRUPAL_ORG_PASSWORD", "").strip()
-        if current_drupal_pass and not force:
-            print("  Password already set — press Enter to keep.")
-
-        while True:
-            drupal_pass = (
-                _prompt("  Drupal.org password (hidden): ", secret=True)
-                or (current_drupal_pass if not force else "")
-            )
-            if not drupal_pass:
-                ans = _prompt("  No password entered. Skip Drupal.org credentials? [y/N]: ")
-                if ans.lower() in ("y", "yes"):
-                    print("  Skipping — patch uploads will save files locally only.")
-                    drupal_user = ""
-                    break
-                continue
-
-            print("  Validating…", end=" ", flush=True)
-            valid, message = _validate_drupal_credentials(drupal_user, drupal_pass)
-            if valid:
-                print(f"✓ {message}")
-                _persist("DRUPAL_ORG_USERNAME", drupal_user)
-                _persist("DRUPAL_ORG_PASSWORD", drupal_pass)
-                break
-            else:
-                print(f"\n  ✗ {message}")
-                ans = _prompt("  Try different credentials? [y/N]: ")
-                if ans.lower() not in ("y", "yes"):
-                    print("  Continuing without Drupal.org credentials.")
-                    drupal_user = ""
-                    break
-    else:
-        print("  Skipping — patch uploads will save files locally only.")
-
-    print("\n[OK] Credentials saved to", CREDENTIALS_FILE)
-    print("     You won't be asked again.\n")
+    print()
+    print("[OK] Credentials saved to", CREDENTIALS_FILE)
+    print()
 
     return get_credentials()

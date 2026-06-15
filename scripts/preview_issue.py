@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,7 +47,7 @@ def _prompt(msg: str) -> str:
         sys.exit(0)
 
 
-def _ask_next_issue() -> str | None:
+def _ask_next_issue() -> Optional[str]:
     """Prompt for another issue URL/ID; return None if the user wants to quit."""
     raw = _prompt("\nEnter another issue URL or ID (or press Enter to quit): ").strip()
     return _normalise(raw) if raw else None

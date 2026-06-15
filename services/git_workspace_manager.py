@@ -26,14 +26,23 @@ _ISSUE_FORK_BASE = "https://git.drupalcode.org/issue"
 class GitWorkspaceManager:
 
     @staticmethod
-    def _git(args: List[str], cwd: str, check: bool = False) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git"] + args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+    def _git(args: List[str], cwd: str, check: bool = False, timeout: int = 30) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(
+                ["git"] + args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Git command timed out after %ds: git %s", timeout, " ".join(args))
+            return subprocess.CompletedProcess(
+                args=["git"] + args,
+                returncode=1,
+                stdout="",
+                stderr=f"git {' '.join(args)}: timed out after {timeout}s",
+            )
 
     @staticmethod
     def setup_workspace(

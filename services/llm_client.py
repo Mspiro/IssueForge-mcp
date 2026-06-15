@@ -14,7 +14,7 @@ from config import (
     LLM_TIMEOUT_OPENAI,
 )
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 logger = logging.getLogger("IssueForge.LlmClient")
 

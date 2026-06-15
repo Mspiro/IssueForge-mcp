@@ -198,7 +198,6 @@ class RegressionChecker:
         overall = True
 
         for test_file in test_files:
-            full_path = os.path.join(env_path, test_file)
             logger.info("Running PHPUnit for %s", test_file)
             try:
                 proc = subprocess.run(
@@ -206,7 +205,7 @@ class RegressionChecker:
                         "ddev", "exec",
                         "vendor/bin/phpunit",
                         f"--configuration=core/phpunit.xml.dist",
-                        full_path,
+                        test_file,
                         "--no-coverage",
                     ],
                     cwd=env_path,

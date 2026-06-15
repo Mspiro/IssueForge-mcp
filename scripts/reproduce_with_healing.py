@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,7 +30,7 @@ from services.reproduction_generator_llm import ReproductionGeneratorLlm
 MAX_ATTEMPTS = 3
 
 
-def run_script(env_path: str, script_name: str) -> tuple[bool, str]:
+def run_script(env_path: str, script_name: str) -> Tuple[bool, str]:
     """Run the script inside DDEV.  Returns (success, combined_output)."""
     result = subprocess.run(
         ["ddev", "drush", "scr", script_name],
@@ -42,7 +43,7 @@ def run_script(env_path: str, script_name: str) -> tuple[bool, str]:
     return result.returncode == 0, combined
 
 
-def validate_php_syntax(env_path: str, script_name: str) -> tuple[bool, str]:
+def validate_php_syntax(env_path: str, script_name: str) -> Tuple[bool, str]:
     """Quick syntax check before execution to catch obvious LLM mistakes."""
     result = subprocess.run(
         ["ddev", "exec", "php", "-l", script_name],
@@ -107,8 +108,34 @@ def main():
         sys.exit(1)
 
     if not os.path.exists(args.script_file):
-        print(f"Error: Script not found: {args.script_file}", file=sys.stderr)
-        sys.exit(1)
+        # No PHP script yet — generate one from the LLM using the env_plan context
+        if not ctx:
+            print(
+                "Error: Script not found and no --env-plan provided to generate one.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"[Generate] No script found — generating reproduction script via LLM...")
+        ep = {}
+        try:
+            with open(args.env_plan) as _f:
+                _d = json.load(_f)
+                ep = _d.get("environment_plan", _d)
+        except Exception:
+            pass
+        generated = ReproductionGeneratorLlm.generate_script(
+            issue_title=issue_title,
+            problem_summary=ctx.get("problem_summary", ""),
+            reproduction_steps=ctx.get("reproduction_steps", []),
+            detected_subsystems=ctx.get("subsystems", []),
+            modified_files=ep.get("modified_files", []),
+        )
+        if not generated or not generated.strip().startswith("<?php"):
+            print("[Generate] LLM did not return valid PHP. Cannot continue.", file=sys.stderr)
+            sys.exit(1)
+        with open(args.script_file, "w") as _f:
+            _f.write(generated)
+        print(f"[Generate] Script written to {args.script_file}")
 
     with open(args.script_file, "r") as f:
         current_script = f.read()

@@ -42,6 +42,9 @@ def check_prerequisites():
 
 
 def get_install_dir():
+    if not sys.stdin.isatty():
+        print(f"Install directory: {DEFAULT_DIR} (using default)")
+        return DEFAULT_DIR
     answer = input(f"Install directory [{DEFAULT_DIR}]: ").strip()
     return answer or DEFAULT_DIR
 

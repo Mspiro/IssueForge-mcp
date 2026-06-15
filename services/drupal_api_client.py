@@ -32,10 +32,10 @@ class DrupalAPIClient:
     }
 
     PRIORITY_MAP = {
-        "50": "Critical",
-        "100": "Major",
-        "150": "Normal",
-        "200": "Minor",
+        400: "Critical",
+        300: "Major",
+        200: "Normal",
+        100: "Minor",
     }
 
     CATEGORY_MAP = {
@@ -123,7 +123,7 @@ class DrupalAPIClient:
             "component": issue_json.get("field_issue_component"),
             "version": issue_json.get("field_issue_version"),
             "priority": self.PRIORITY_MAP.get(
-                issue_json.get("field_issue_priority"),
+                int(issue_json.get("field_issue_priority") or 0),
                 issue_json.get("field_issue_priority")
             ),
             "category": self.CATEGORY_MAP.get(

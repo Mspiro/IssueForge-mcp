@@ -41,15 +41,12 @@ After running, read the plan file so you know what's in it:
 ```
 ! cat env_plan_<ID>.json
 ```
-From the JSON, note:
-- `reproduction_steps` — the structured steps extracted from the issue description
-- `llm_analysis.root_cause` — the detected root cause
-- `environment_plan` — branch, PHP version, modules needed
+From the JSON, read: `llm_analysis.root_cause`, `environment_plan` (branch, PHP, modules), and `reproduction_steps`.
 
-Show the user a brief summary:
-- **Root cause**: what the analysis found
-- **Reproduction steps**: list them clearly (if `reproduction_steps` is empty, derive steps from the issue problem description and proposed resolution you already read in Step 1)
-- **Environment**: branch, PHP version, any contrib modules
+Then show the user:
+- **Root cause**: what was detected
+- **Environment**: Drupal branch, PHP version, contrib modules to install
+- **Reproduction steps**: Write these yourself based on your understanding of the issue — do NOT just copy raw text from the issue. Write clear, numbered, developer-friendly steps. Each step should be a concrete action (e.g. "Go to /admin/structure/types, click Add content type, fill in Name = 'Test', save"). If the issue involves a code path or a specific trigger, name it explicitly.
 
 Then ask: proceed to provision + reproduce [y], or different issue [n]?
 
@@ -59,14 +56,21 @@ Then ask: proceed to provision + reproduce [y], or different issue [n]?
 ```
 Clones Drupal, starts DDEV, installs modules. Takes 3-5 minutes.
 
+After provisioning succeeds, get a one-time login link:
+```
+! cd {{ISSUEFORGE_DIR}}/environments/env_<ID> && ddev drush uli
+```
+Show the user:
+- Site URL: `https://env-<ID>.ddev.site`
+- Login link: the URL from `ddev drush uli` (valid for 1 hour, logs in as admin)
+
 ### Step 4 — Reproduce the bug
-Using the `reproduction_steps` from the env_plan (or your own derivation from Step 2), write a PHP Drush script that programmatically triggers the bug. Save it as `repro_<ID>.php`, then run it:
+Write a PHP Drush script (`repro_<ID>.php`) that programmatically triggers the bug — based on your reproduction steps from Step 2. Then run it:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> repro_<ID>.php \
     --issue-title "<TITLE>" --env-plan env_plan_<ID>.json
 ```
-On success: site is at `https://env-<ID>.ddev.site` (admin / admin).
-Tell the user exactly where to go and what to look for to observe the bug.
+After the script runs, tell the user exactly what to look for in the site to observe the bug (specific URL, UI element, error message, or log entry).
 
 ### Step 5 — Apply and validate a patch or MR
 

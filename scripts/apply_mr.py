@@ -171,7 +171,7 @@ def main():
     applied = sum(1 for r in results if r.get("applied"))
     passed = sum(1 for r in results
                  if r.get("regression", {}) and r["regression"].get("overall_passed", True))
-    print(f"\n[Summary] {applied}/{len(results)} applied. {passed}/{applied} passed regression.\n")
+    print(f"\n[Summary] {applied}/{len(results)} applied. {passed}/{applied} passed regression.")
 
     any_failed = any(
         not r.get("applied") or
@@ -179,23 +179,35 @@ def main():
         for r in results
     )
 
-    # Offer to commit and submit — requires explicit choice and confirmation
+    # Print next steps so Claude can guide the user
     status = GitWorkspaceManager.get_status(env_path)
+    branch = GitWorkspaceManager._git(
+        ["rev-parse", "--abbrev-ref", "HEAD"], env_path
+    ).stdout.strip() or "issue-work"
+    issue_page = f"https://www.drupal.org/project/drupal/issues/{args.issue_id}"
+
+    print()
+    print("=" * 65)
+    print("  NEXT STEPS")
+    print("=" * 65)
     if status["has_changes"]:
-        labels = [r.get("label", "") for r in results if r.get("applied")]
-        suggested = (
-            f"Apply {labels[0]}" if len(labels) == 1
-            else f"Apply {len(labels)} patches/MRs for issue #{args.issue_id}"
-        )
-        GitWorkspaceManager.submit_with_confirmation(
-            env_path,
-            issue_id=args.issue_id,
-            suggested_commit_msg=suggested,
-            drupal_username=drupal_username,
-            drupal_password=drupal_password,
-        )
+        print(f"  Branch     : {branch}")
+        print(f"  Issue page : {issue_page}")
+        print()
+        print("  To submit as a Merge Request:")
+        print("    1. Open the issue page above")
+        print("    2. Scroll to 'Merge requests' section")
+        print("    3. Click 'Get push access' (creates your issue fork)")
+        print("    4. Then push:")
+        print(f"       git -C {env_path} add -A")
+        print(f"       git -C {env_path} commit -m 'Apply fix for #{args.issue_id}'")
+        print(f"       git -C {env_path} push issue HEAD:{branch}")
+        print()
+        print("  Or to save as a patch file:")
+        print(f"       git -C {env_path} diff HEAD > {args.issue_id}.patch")
     else:
-        print("No uncommitted changes in working tree — nothing to submit.")
+        print("  No uncommitted changes — nothing to submit.")
+    print("=" * 65)
 
     if any_failed:
         sys.exit(1)

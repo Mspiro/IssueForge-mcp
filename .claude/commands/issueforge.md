@@ -67,7 +67,23 @@ Apply all MRs from the plan:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --from-plan env_plan_<ID>.json
 ```
-Each run: applies diff → regression check (health + PHPUnit + compatibility) → shows diff stat → offers push or patch upload.
+Each run: applies diff → regression check (health + PHPUnit + compatibility) → shows diff stat → prints NEXT STEPS block.
+
+After the script finishes, read the NEXT STEPS block and ask the user:
+- Do you want to submit this as a **Merge Request**?
+- Or save it as a **patch file**?
+
+If they choose Merge Request:
+1. Tell them to open the issue page and click **"Get push access"** in the Merge Requests section (this creates their issue fork on git.drupalcode.org)
+2. Ask them to confirm once done, then run the git commands from the NEXT STEPS block using `!`:
+   ```
+   ! git -C <env_path> add -A
+   ! git -C <env_path> commit -m "Apply fix for #<ISSUE_ID>"
+   ! git -C <env_path> push issue HEAD:<branch>
+   ```
+3. Tell them the MR link to open once pushed.
+
+If they choose patch: run the patch save command from NEXT STEPS and show them the file path.
 
 ---
 

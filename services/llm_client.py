@@ -64,7 +64,7 @@ class LlmClient:
             if result:
                 return result
 
-        logger.warning("No LLM API keys configured or all requests failed.")
+        logger.debug("No LLM API keys configured — LLM features unavailable.")
         return ""
 
     @staticmethod

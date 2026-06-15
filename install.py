@@ -167,7 +167,6 @@ def main():
 
     clone_or_update(install_dir)
     python_bin = install_dependencies(install_dir)
-    setup_llm_key(install_dir)
     run_credential_setup(install_dir, python_bin)
     register_skill(install_dir)
 

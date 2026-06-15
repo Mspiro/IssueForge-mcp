@@ -16,12 +16,19 @@ class DrupalAPIClient:
     BASE_URL = "https://www.drupal.org/api-d7"
 
     STATUS_MAP = {
-        "1": "Active",
-        "2": "Fixed",
-        "13": "Needs review",
-        "14": "Needs work",
-        "15": "Reviewed & tested by the community",
-        "16": "Patch to be ported",
+        1: "Active",
+        2: "Fixed",
+        3: "Closed (outdated)",
+        4: "Postponed",
+        5: "Closed (won't fix)",
+        6: "Closed (duplicate)",
+        7: "Closed (fixed)",
+        8: "Needs work",
+        13: "Needs review",
+        14: "Reviewed & tested by the community",
+        15: "Patch (to be ported)",
+        16: "Postponed (maintainer needs more info)",
+        18: "Closed (cannot reproduce)",
     }
 
     PRIORITY_MAP = {
@@ -110,7 +117,7 @@ class DrupalAPIClient:
         return {
             "title": issue_json.get("title"),
             "status": self.STATUS_MAP.get(
-                issue_json.get("field_issue_status"),
+                int(issue_json.get("field_issue_status") or 0),
                 issue_json.get("field_issue_status")
             ),
             "component": issue_json.get("field_issue_component"),

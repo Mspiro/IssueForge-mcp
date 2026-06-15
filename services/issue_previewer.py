@@ -63,7 +63,7 @@ class IssuePreviewer:
                 patches.append({
                     "id": fid,
                     "filename": fm.get("filename") or fm.get("name", f"patch-{fid}"),
-                    "size": int(fm.get("filesize", 0)),
+                    "size": int(fm.get("size") or fm.get("filesize") or 0),
                     "url": fm.get("url", ""),
                 })
             except Exception:

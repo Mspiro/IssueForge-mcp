@@ -32,5 +32,6 @@ env_plan*.json
 # Logs
 logs/
 
-# Claude Code workspace files
-.claude/
+# Claude Code — track commands, ignore local settings
+.claude/settings*
+.claude/scheduled_tasks*

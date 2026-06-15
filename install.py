@@ -84,6 +84,55 @@ def install_dependencies(install_dir):
     return python_path
 
 
+def setup_llm_key(install_dir):
+    """Ask for an LLM API key and write it to .env if not already set."""
+    env_file = os.path.join(install_dir, ".env")
+
+    # Read existing .env (if any)
+    existing = {}
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, _, v = line.partition("=")
+                    existing[k.strip()] = v.strip()
+
+    # If any key is already set, skip
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        if existing.get(key):
+            print(f"LLM API key already configured ({key}).")
+            return
+
+    print("\nLLM API key — required for issue analysis and fix generation.")
+    print("Provide one of: Anthropic, Gemini, or OpenAI key.\n")
+
+    if not sys.stdin.isatty():
+        print("  Non-interactive mode: add your key to", env_file, "manually.")
+        print("  Example:  ANTHROPIC_API_KEY=sk-ant-...")
+        return
+
+    providers = [
+        ("ANTHROPIC_API_KEY", "Anthropic (recommended) — https://console.anthropic.com/"),
+        ("GEMINI_API_KEY",    "Gemini                  — https://aistudio.google.com/apikey"),
+        ("OPENAI_API_KEY",    "OpenAI                   — https://platform.openai.com/api-keys"),
+    ]
+    for env_var, label in providers:
+        val = input(f"  {label}\n  Key (Enter to skip): ").strip()
+        if val:
+            existing[env_var] = val
+            break
+
+    if not any(existing.get(k) for k, _ in providers):
+        print("  No key entered — skipping. Add it to", env_file, "before using the tool.")
+        return
+
+    lines = [f"{k}={v}" for k, v in existing.items()]
+    with open(env_file, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"  Key saved to {env_file}")
+
+
 def run_credential_setup(install_dir, python_bin):
     print("\nSetting up credentials (GitLab token, git identity, Drupal.org)...")
     run([python_bin, "scripts/setup.py"], cwd=install_dir)
@@ -118,6 +167,7 @@ def main():
 
     clone_or_update(install_dir)
     python_bin = install_dependencies(install_dir)
+    setup_llm_key(install_dir)
     run_credential_setup(install_dir, python_bin)
     register_skill(install_dir)
 

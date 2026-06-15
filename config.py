@@ -114,7 +114,7 @@ REGRESSION_HEALTH_TIMEOUT = int(os.getenv("ISSUEFORGE_HEALTH_TIMEOUT", "30"))
 # Logging
 # ---------------------------------------------------------------------------
 
-LOG_LEVEL_CONSOLE = os.getenv("ISSUEFORGE_LOG_LEVEL_CONSOLE", "INFO")
+LOG_LEVEL_CONSOLE = os.getenv("ISSUEFORGE_LOG_LEVEL_CONSOLE", "WARNING")
 LOG_LEVEL_FILE = os.getenv("ISSUEFORGE_LOG_LEVEL_FILE", "DEBUG")
 LOG_FILE = os.getenv(
     "ISSUEFORGE_LOG_FILE",

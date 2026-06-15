@@ -12,6 +12,7 @@ Or as a one-liner:
     curl -fsSL https://raw.githubusercontent.com/Mspiro/IssueForge-mcp/main/install.py | python3
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -20,7 +21,9 @@ from pathlib import Path
 
 REPO_URL = "https://github.com/Mspiro/IssueForge-mcp.git"
 DEFAULT_DIR = str(Path.home() / "IssueForge")
-CLAUDE_COMMANDS_DIR = Path.home() / ".claude" / "commands"
+CLAUDE_DIR = Path.home() / ".claude"
+CLAUDE_COMMANDS_DIR = CLAUDE_DIR / "commands"
+CLAUDE_SETTINGS = CLAUDE_DIR / "settings.json"
 
 
 def run(cmd, cwd=None, check=True):
@@ -67,10 +70,8 @@ def install_dependencies(install_dir):
     python_path = os.path.join(venv_dir, "Scripts" if is_win else "bin", "python")
 
     if not os.path.exists(pip_path):
-        # Try standard venv first
         result = subprocess.run([sys.executable, "-m", "venv", venv_dir], check=False)
         if result.returncode != 0 or not os.path.exists(pip_path):
-            # Fallback for Debian/Ubuntu where python3-venv may be missing
             print("  Standard venv unavailable — bootstrapping pip manually...")
             subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv_dir], check=True)
             import urllib.request
@@ -84,58 +85,9 @@ def install_dependencies(install_dir):
     return python_path
 
 
-def setup_llm_key(install_dir):
-    """Ask for an LLM API key and write it to .env if not already set."""
-    env_file = os.path.join(install_dir, ".env")
-
-    # Read existing .env (if any)
-    existing = {}
-    if os.path.exists(env_file):
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, _, v = line.partition("=")
-                    existing[k.strip()] = v.strip()
-
-    # If any key is already set, skip
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
-        if existing.get(key):
-            print(f"LLM API key already configured ({key}).")
-            return
-
-    print("\nLLM API key — required for issue analysis and fix generation.")
-    print("Provide one of: Anthropic, Gemini, or OpenAI key.\n")
-
-    if not sys.stdin.isatty():
-        print("  Non-interactive mode: add your key to", env_file, "manually.")
-        print("  Example:  ANTHROPIC_API_KEY=sk-ant-...")
-        return
-
-    providers = [
-        ("ANTHROPIC_API_KEY", "Anthropic (recommended) — https://console.anthropic.com/"),
-        ("GEMINI_API_KEY",    "Gemini                  — https://aistudio.google.com/apikey"),
-        ("OPENAI_API_KEY",    "OpenAI                   — https://platform.openai.com/api-keys"),
-    ]
-    for env_var, label in providers:
-        val = input(f"  {label}\n  Key (Enter to skip): ").strip()
-        if val:
-            existing[env_var] = val
-            break
-
-    if not any(existing.get(k) for k, _ in providers):
-        print("  No key entered — skipping. Add it to", env_file, "before using the tool.")
-        return
-
-    lines = [f"{k}={v}" for k, v in existing.items()]
-    with open(env_file, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    print(f"  Key saved to {env_file}")
-
-
 def run_credential_setup(install_dir, python_bin):
-    print("\nSetting up credentials (GitLab token, git identity, Drupal.org)...")
-    run([python_bin, "scripts/setup.py"], cwd=install_dir)
+    print("\nSetting up credentials (git identity, GitLab token, Drupal.org)...")
+    run([python_bin, "scripts/setup.py", "--force"], cwd=install_dir)
 
 
 def register_skill(install_dir):
@@ -148,13 +100,49 @@ def register_skill(install_dir):
     with open(skill_template) as f:
         content = f.read()
 
-    # Substitute the placeholder with the real install path
     content = content.replace("{{ISSUEFORGE_DIR}}", install_dir)
 
     CLAUDE_COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
     dest = CLAUDE_COMMANDS_DIR / "issueforge.md"
     dest.write_text(content)
-    print(f"Registered /issueforge command in Claude Code.")
+    print("Registered /issueforge command in Claude Code.")
+
+
+def register_permissions(install_dir):
+    """Add IssueForge bash commands to Claude Code's auto-allow list."""
+    new_rules = [
+        f"Bash(python {install_dir}/scripts/*)",
+        f"Bash(python3 {install_dir}/scripts/*)",
+        f"Bash(ddev describe*)",
+        f"Bash(ddev start*)",
+        f"Bash(ddev stop*)",
+        f"Bash(ddev poweroff*)",
+        f"Bash(ddev drush*)",
+        f"Bash(git -C {install_dir}*)",
+    ]
+
+    settings = {}
+    if CLAUDE_SETTINGS.exists():
+        try:
+            settings = json.loads(CLAUDE_SETTINGS.read_text())
+        except Exception:
+            pass
+
+    permissions = settings.setdefault("permissions", {})
+    allow = permissions.setdefault("allow", [])
+
+    added = 0
+    for rule in new_rules:
+        if rule not in allow:
+            allow.append(rule)
+            added += 1
+
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+    CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2))
+    if added:
+        print(f"Added {added} auto-allow rules to Claude Code settings.")
+    else:
+        print("Claude Code permissions already up to date.")
 
 
 def main():
@@ -169,11 +157,12 @@ def main():
     python_bin = install_dependencies(install_dir)
     run_credential_setup(install_dir, python_bin)
     register_skill(install_dir)
+    register_permissions(install_dir)
 
     print("\n" + "=" * 50)
     print("  Done!")
     print(f"  Installed at : {install_dir}")
-    print("  Open Claude Code in any project and type:")
+    print("  Restart Claude Code, then type:")
     print("  /issueforge <drupal-issue-url>")
     print("=" * 50)
 

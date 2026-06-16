@@ -23,6 +23,7 @@ env-*.code-workspace
 temp_patch_*
 issue.patch
 setup_reproduction.php
+repro_*.php
 *.diff
 *.patch
 

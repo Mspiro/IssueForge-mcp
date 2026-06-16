@@ -37,11 +37,11 @@ Then ask the user:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/analyze_issue.py <URL> 2>/dev/null > env_plan_<ID>.json
 ```
-After running, read the plan file so you know what's in it:
+After running, read the slim summary (avoids loading the full multi-KB JSON):
 ```
-! cat env_plan_<ID>.json
+! python {{ISSUEFORGE_DIR}}/scripts/slim_plan.py env_plan_<ID>.json
 ```
-From the JSON, read: `llm_analysis.root_cause`, `environment_plan` (branch, PHP, modules), and `reproduction_steps`.
+From the slim JSON, read: `llm_analysis.root_cause`, `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, `detected_subsystems`, and `suggested_fix_strategies`.
 
 Then show the user:
 - **Root cause**: what was detected
@@ -103,6 +103,41 @@ If they choose Merge Request:
 3. Tell them the MR link to open once pushed.
 
 If they choose patch: run the patch save command from NEXT STEPS and show them the file path.
+
+### Step 6 — Generate issue comment
+
+Once the user has finished their session (tested, fixed, or reproduced), generate a comment they can post on the Drupal.org issue page.
+
+First, identify which scenario applies based on what happened in this session:
+
+**Scenario A — User tested an existing patch or MR**
+They ran `apply_mr.py` with someone else's patch/MR ID and reviewed the results.
+Comment should cover: what was tested (MR !N or patch ID), branch + PHP version, whether the bug reproduced first, whether the fix resolved it, regression check outcome.
+
+**Scenario B — User submitted their own fix (new MR or patch)**
+They wrote code changes, committed, and either pushed a new MR or exported a patch.
+Before writing the comment, ask: "What is the MR number or patch file ID that was created?" (they'll have this from the git.drupalcode.org URL or the drupal.org file upload).
+Comment should cover: "Created MR !N / uploaded patch #ID that fixes this by [brief description of what was changed]", branch + PHP, regression results.
+
+**Scenario C — User only confirmed reproduction (no fix applied)**
+They ran through Steps 1–4 but did not apply or submit a fix.
+Comment should cover: confirmed the bug reproduces on branch + PHP version, exact trigger observed, any additional detail not already in the thread.
+
+**Scenario D — User could not reproduce**
+Comment should cover: steps attempted, environment, what was observed instead, any version-specific nuance.
+
+---
+
+For all scenarios, the comment must:
+- Be concise — 3–8 sentences, no padding
+- State the environment explicitly: Drupal branch (e.g. `11.1.x`), PHP version
+- State the outcome clearly: reproduces / fixed / cannot reproduce
+- Add one concrete observation if it adds value (edge case, related code path, etc.)
+- NOT repeat what other commenters already said (check RECENT_COMMENTS from Step 1)
+- NOT use filler phrases ("Great work!", "Thanks for the patch", "Hope this helps")
+- Follow Drupal.org style: plain prose, no markdown headers, use `backticks` only for function names or file paths
+
+Present the comment in a copyable block. Then ask: "Anything to adjust before you post this?"
 
 ---
 

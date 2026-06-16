@@ -103,8 +103,21 @@ def run_credential_setup(install_dir, python_bin):
     run([python_bin, "scripts/setup.py", "--force"], cwd=install_dir)
 
 
+ISSUEFORGE_LINK = Path.home() / ".issueforge" / "current"
+ISSUEFORGE_LINK_STR = "$HOME/.issueforge/current"
+
+
+def register_symlink(install_dir):
+    """Point ~/.issueforge/current at the active install directory."""
+    ISSUEFORGE_LINK.parent.mkdir(parents=True, exist_ok=True)
+    if ISSUEFORGE_LINK.exists() or ISSUEFORGE_LINK.is_symlink():
+        ISSUEFORGE_LINK.unlink()
+    ISSUEFORGE_LINK.symlink_to(install_dir)
+    print(f"Active install: {ISSUEFORGE_LINK} -> {install_dir}")
+
+
 def register_skill(install_dir):
-    """Write ~/.claude/commands/issueforge.md with the correct install path."""
+    """Write ~/.claude/commands/issueforge.md using the fixed symlink path."""
     skill_template = os.path.join(install_dir, ".claude", "commands", "issueforge.md")
     if not os.path.exists(skill_template):
         print("Skill template not found — skipping Claude registration.")
@@ -113,7 +126,8 @@ def register_skill(install_dir):
     with open(skill_template) as f:
         content = f.read()
 
-    content = content.replace("{{ISSUEFORGE_DIR}}", install_dir)
+    # Use the fixed symlink path so the skill never needs to change on reinstall.
+    content = content.replace("{{ISSUEFORGE_DIR}}", ISSUEFORGE_LINK_STR)
 
     CLAUDE_COMMANDS_DIR.mkdir(parents=True, exist_ok=True)
     dest = CLAUDE_COMMANDS_DIR / "issueforge.md"
@@ -124,14 +138,14 @@ def register_skill(install_dir):
 def register_permissions(install_dir):
     """Add IssueForge bash commands to Claude Code's auto-allow list."""
     new_rules = [
-        f"Bash(python {install_dir}/scripts/*)",
-        f"Bash(python3 {install_dir}/scripts/*)",
+        f"Bash(python $HOME/.issueforge/current/scripts/*)",
+        f"Bash(python3 $HOME/.issueforge/current/scripts/*)",
         f"Bash(ddev describe*)",
         f"Bash(ddev start*)",
         f"Bash(ddev stop*)",
         f"Bash(ddev poweroff*)",
         f"Bash(ddev drush*)",
-        f"Bash(git -C {install_dir}*)",
+        f"Bash(git -C $HOME/.issueforge/current*)",
     ]
 
     settings = {}
@@ -169,6 +183,7 @@ def main():
     clone_or_update(install_dir)
     python_bin = install_dependencies(install_dir)
     run_credential_setup(install_dir, python_bin)
+    register_symlink(install_dir)
     register_skill(install_dir)
     register_permissions(install_dir)
 

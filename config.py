@@ -20,9 +20,11 @@ DRUPAL_API_USER_AGENT = "IssueForge/1.0"
 # Environment provisioner
 # ---------------------------------------------------------------------------
 
+_BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+
 ENVIRONMENTS_DIR = os.getenv(
     "ISSUEFORGE_ENVIRONMENTS_DIR",
-    os.path.join(os.path.dirname(__file__), "environments"),
+    os.path.join(_BASE_DIR, "environments"),
 )
 PROVISIONER_COMMAND_TIMEOUT = int(
     os.getenv("ISSUEFORGE_PROVISIONER_TIMEOUT", "600")
@@ -95,6 +97,6 @@ LOG_LEVEL_CONSOLE = os.getenv("ISSUEFORGE_LOG_LEVEL_CONSOLE", "WARNING")
 LOG_LEVEL_FILE = os.getenv("ISSUEFORGE_LOG_LEVEL_FILE", "DEBUG")
 LOG_FILE = os.getenv(
     "ISSUEFORGE_LOG_FILE",
-    os.path.join(os.path.dirname(__file__), "logs", "issueforge.log"),
+    os.path.join(_BASE_DIR, "logs", "issueforge.log"),
 )
 LOG_ROTATION_DAYS = int(os.getenv("ISSUEFORGE_LOG_ROTATION_DAYS", "7"))

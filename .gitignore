@@ -35,3 +35,4 @@ logs/
 # Claude Code — track commands, ignore local settings
 .claude/settings*
 .claude/scheduled_tasks*
+PROPOSAL.md

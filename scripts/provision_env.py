@@ -35,9 +35,53 @@ def main():
         print(json.dumps(result, indent=2))
         if not result.get("success"):
             sys.exit(1)
+        _write_workspace_file(args.issue_id, result.get("env_path", ""))
     except Exception as e:
         print(json.dumps({"error": str(e), "success": False}))
         sys.exit(1)
+
+
+def _write_workspace_file(issue_id: str, env_path: str):
+    """
+    Generate a .code-workspace file so the IDE shows the Drupal
+    environment's git changes in its Source Control panel alongside
+    the IssueForge project.
+    """
+    if not env_path or not os.path.isdir(env_path):
+        return
+
+    issueforge_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    workspace = {
+        "folders": [
+            {
+                "path": issueforge_dir,
+                "name": "IssueForge"
+            },
+            {
+                "path": env_path,
+                "name": f"Drupal env-{issue_id} (issue #{issue_id})"
+            }
+        ],
+        "settings": {
+            "git.openRepositoryInParentFolders": "never"
+        }
+    }
+
+    workspace_file = os.path.join(issueforge_dir, f"env-{issue_id}.code-workspace")
+    with open(workspace_file, "w") as f:
+        json.dump(workspace, f, indent=2)
+
+    print()
+    print("=" * 65)
+    print("  IDE WORKSPACE")
+    print("=" * 65)
+    print(f"  To see git changes in your IDE's Source Control panel:")
+    print(f"  Open this file in VS Code:")
+    print(f"    {workspace_file}")
+    print()
+    print("  Or from terminal:")
+    print(f"    code {workspace_file}")
+    print("=" * 65)
 
 if __name__ == "__main__":
     main()

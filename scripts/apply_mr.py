@@ -179,19 +179,51 @@ def main():
         for r in results
     )
 
-    # Print next steps so Claude can guide the user
+    # Show the environment git state so the user can verify what happened
     status = GitWorkspaceManager.get_status(env_path)
     branch = GitWorkspaceManager._git(
         ["rev-parse", "--abbrev-ref", "HEAD"], env_path
     ).stdout.strip() or "issue-work"
-    issue_page = f"https://www.drupal.org/project/drupal/issues/{args.issue_id}"
 
+    git_status = GitWorkspaceManager._git(["status", "--short"], env_path).stdout.strip()
+    git_log = GitWorkspaceManager._git(
+        ["log", "--oneline", "-5"], env_path
+    ).stdout.strip()
+    git_remotes = GitWorkspaceManager._git(["remote", "-v"], env_path).stdout.strip()
+
+    print()
+    print("=" * 65)
+    print("  ENVIRONMENT GIT STATE")
+    print("  (This is the Drupal repo inside the environment,")
+    print("   separate from IssueForge itself)")
+    print("=" * 65)
+    print(f"  Branch  : {branch}")
+    print(f"  Path    : {env_path}")
+    print()
+    if git_status:
+        print("  Changed files (not yet committed):")
+        for line in git_status.splitlines():
+            print(f"    {line}")
+    else:
+        print("  Changed files: none (patch may already be committed)")
+    print()
+    if git_log:
+        print("  Recent commits:")
+        for line in git_log.splitlines():
+            print(f"    {line}")
+    print()
+    if git_remotes:
+        print("  Remotes:")
+        for line in git_remotes.splitlines():
+            print(f"    {line}")
+    print("=" * 65)
+
+    issue_page = f"https://www.drupal.org/project/drupal/issues/{args.issue_id}"
     print()
     print("=" * 65)
     print("  NEXT STEPS")
     print("=" * 65)
     if status["has_changes"]:
-        print(f"  Branch     : {branch}")
         print(f"  Issue page : {issue_page}")
         print()
         print("  To submit as a Merge Request:")

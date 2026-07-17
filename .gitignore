@@ -33,6 +33,10 @@ repro_*.php
 # Generated analysis output files
 env_plan*.json
 
+# Dashboard — per-user data and built output; template.html/dashboard.css/
+# dashboard.js are tool source and stay tracked.
+dashboard/ledger.json
+
 # Logs
 logs/
 

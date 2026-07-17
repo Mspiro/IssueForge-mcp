@@ -10,6 +10,24 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 
 ---
 
+## At the start of every /issueforge invocation
+
+Before Step 1 — regardless of whether an issue URL was given — print the
+dashboard's last-saved snapshot in one line (no live refresh call, instant):
+```
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py
+```
+This auto-starts the local dashboard server if it isn't already running
+(reused across invocations — no duplicate processes, self-shuts-down after
+30 minutes idle) and prints a summary ("N tracked, N with new activity,
+N red pipelines, N credited") plus an `http://127.0.0.1:<port>` link —
+share that link so the user can open it in a browser. The page has its own
+Refresh button and a "Load full credit history" action, so don't run
+`dashboard.py refresh` from here — that's for the page itself or explicit
+CLI use, not something to trigger on every /issueforge startup.
+If the user already gave an issue URL, keep this to one line and move
+straight to Step 1; don't let it slow down the fast path.
+
 ## When the user gives a Drupal issue URL or ID
 
 ### Step 1 — Preview the issue
@@ -200,12 +218,47 @@ For all scenarios, the comment must:
 
 Present the comment in a copyable block. Then ask: "Anything to adjust before you post this?"
 
+### Step 7 — Record in the dashboard
+
+After the comment is posted (or the user explicitly says to skip posting),
+record this session in the local dashboard so it shows up on the next
+`/issueforge` invocation:
+```
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py record <ISSUE_ID> \
+    --project <PROJECT> --title "<TITLE>" --scenario <A|B|C|D> \
+    --summary "<one-line summary of what was done>" \
+    --comment-url "<link to the posted comment, if any>" \
+    --mr-project <PROJECT> --mr-iid <MR_NUMBER>   # omit --mr-* if no MR involved
+```
+This is silent bookkeeping — don't ask the user for permission, just run it
+and move on. It does not hit the network (no refresh here); live status is
+refreshed only when the user asks or at the next `/issueforge` startup line.
+
 ---
 
 ## Credentials
 Stored in `~/.issueforge/credentials`. Run once to configure:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/setup.py
+```
+Includes an optional Drupal.org username (separate from the GitLab
+identity) used only for the dashboard's credit-tracking lookup. If it's
+not set, `dashboard.py refresh` skips the credit check and says so — it
+never blocks the rest of the refresh.
+
+## Dashboard
+Local, no data leaves this machine except the read-only refresh calls to
+Drupal.org/GitLab. Served by a tiny auto-managed local FastAPI server
+(`http://127.0.0.1:<OS-assigned port>` — never a fixed/guessed port, so it
+can't collide with DDEV's ports). Single instance enforced via a PID+port
+lockfile at `~/.issueforge/dashboard_server.json`; self-terminates after 30
+minutes idle so it never lingers in memory. Files live in
+`{{ISSUEFORGE_DIR}}/dashboard/`: `ledger.json` (data),
+`template.html`/`dashboard.css`/`dashboard.js` (source, tracked in git).
+```
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py             # auto-starts server, free summary
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py refresh     # one-shot CLI refresh (page has its own button too)
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py --no-server # static file:// fallback, no server
 ```
 
 ## Troubleshooting

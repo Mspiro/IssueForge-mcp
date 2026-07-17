@@ -130,9 +130,16 @@ class DrupalAPIClient:
                 issue_json.get("field_issue_category"),
                 issue_json.get("field_issue_category")
             ),
-            "problem_description_html": issue_json.get(
-                "body", {}
-            ).get("value", ""),
+            # api-d7 serializes an EMPTY body field as [] rather than {} or
+            # null (a known Drupal 7 REST quirk for empty field
+            # collections) — issues with no description at all (common for
+            # terse housekeeping tickets, e.g. "Fix PHPCS & cspell") hit
+            # this, and `[].get(...)` raised AttributeError, crashing
+            # metadata parsing for that issue entirely.
+            "problem_description_html": (
+                issue_json.get("body").get("value", "")
+                if isinstance(issue_json.get("body"), dict) else ""
+            ),
             "patch_file_ids": patch_ids,
             "comment_ids": comment_ids,
             "issue_id": issue_json.get("nid"),

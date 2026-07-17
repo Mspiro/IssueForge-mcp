@@ -138,6 +138,7 @@ class TestGetMrDetails:
             "web_url": "https://git.drupalcode.org/project/drupal/-/merge_requests/123",
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-02T00:00:00Z",
+            "source_project_id": 4218,
         }
         with patch.object(client, "_safe_get", return_value=mock_resp):
             result = client.get_mr_details("drupal", "123")
@@ -146,6 +147,67 @@ class TestGetMrDetails:
         assert result["source_branch"] == "2692289-fix-autocomplete"
         assert result["project"] == "drupal"
         assert result["mr_iid"] == "123"
+        assert result["source_project_id"] == 4218
+
+
+class TestGetLatestPipelineStatus:
+    def test_returns_none_when_no_pipelines(self):
+        client = GitlabMrClient(token="fake-token")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        with patch.object(client, "_safe_get", return_value=mock_resp):
+            assert client.get_latest_pipeline_status("drupal", "some-branch") is None
+
+    def test_returns_none_on_request_failure(self):
+        client = GitlabMrClient(token="fake-token")
+        with patch.object(client, "_safe_get", return_value=None):
+            assert client.get_latest_pipeline_status("drupal", "some-branch") is None
+
+    def test_parses_latest_pipeline(self):
+        client = GitlabMrClient(token="fake-token")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [{
+            "status": "success",
+            "web_url": "https://git.drupalcode.org/issue/drupal-2727281/-/pipelines/892715",
+            "sha": "84760c4ae12",
+        }]
+        with patch.object(client, "_safe_get", return_value=mock_resp):
+            result = client.get_latest_pipeline_status(
+                "issue/drupal-2727281", "2727281-template-filelink-is"
+            )
+        assert result["status"] == "success"
+        assert result["sha"] == "84760c4ae12"
+
+    def test_url_encodes_ref_with_special_characters(self):
+        client = GitlabMrClient(token="fake-token")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        with patch.object(client, "_safe_get", return_value=mock_resp) as safe_get:
+            client.get_latest_pipeline_status("drupal", "feature/my-branch")
+        called_url = safe_get.call_args[0][0]
+        assert "feature%2Fmy-branch" in called_url
+
+    def test_project_id_used_as_is_no_prefix_added(self):
+        # Regression coverage: a numeric source_project_id (or a fork path
+        # like "issue/drupal-2727281") must be encoded exactly as given —
+        # NOT prefixed with "project/" the way get_mr_details()'s target
+        # project lookup does, since MR pipelines run under the source
+        # fork's own project, a different namespace than the target.
+        client = GitlabMrClient(token="fake-token")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        with patch.object(client, "_safe_get", return_value=mock_resp) as safe_get:
+            client.get_latest_pipeline_status(4218, "some-branch")
+        called_url = safe_get.call_args[0][0]
+        assert "/projects/4218/pipelines" in called_url
+        assert "project%2F4218" not in called_url
+
+    def test_none_project_id_returns_none_without_request(self):
+        client = GitlabMrClient(token="fake-token")
+        with patch.object(client, "_safe_get") as safe_get:
+            result = client.get_latest_pipeline_status(None, "some-branch")
+        assert result is None
+        safe_get.assert_not_called()
 
 
 class TestDownloadMrDiff:

@@ -139,9 +139,61 @@ class GitlabMrClient:
                 "updated_at": data.get("updated_at"),
                 "project": project,
                 "mr_iid": mr_iid,
+                # The MR's pipelines run in the SOURCE project's context
+                # (the issue fork), not the target project this MR is
+                # opened against — e.g. an MR targeting "project/drupal"
+                # commonly has its source branch and pipelines on
+                # "issue/drupal-<id>", a different GitLab project entirely.
+                # Use this numeric ID (not the naming convention) to look up
+                # pipeline status, since forks don't reliably follow any
+                # one naming pattern.
+                "source_project_id": data.get("source_project_id"),
             }
         except Exception as e:
             logger.warning("Could not fetch MR details for %s!%s: %s", project, mr_iid, e)
+            return None
+
+    def get_latest_pipeline_status(self, project_id, ref: str) -> Optional[Dict]:
+        """
+        Fetch the most recent CI pipeline status for a branch/ref.
+
+        project_id: the exact GitLab project identifier to query — either
+        a numeric project ID (preferred; e.g. get_mr_details()'s
+        "source_project_id") or an already-namespaced path like
+        "project/drupal" or "issue/drupal-2727281". This is taken as-is and
+        URL-encoded whole — it does NOT get a "project/" prefix added,
+        since MR pipelines commonly run under the source fork's project
+        (e.g. "issue/<project>-<issue_id>"), which is a different
+        namespace convention than the target project.
+
+        Returns {"status": "success"/"failed"/"running"/..., "web_url": ...,
+        "sha": ...} for the newest pipeline, or None if the request fails or
+        no pipeline exists for that ref.
+        """
+        if not project_id:
+            return None
+        encoded = requests.utils.quote(str(project_id), safe="")
+        url = (
+            f"{GITLAB_API_BASE}/projects/{encoded}/pipelines"
+            f"?ref={requests.utils.quote(ref, safe='')}&per_page=1"
+        )
+        try:
+            resp = self._safe_get(url)
+            if resp is None:
+                return None
+            data = resp.json()
+            if not data:
+                return None
+            latest = data[0]
+            return {
+                "status": latest.get("status"),
+                "web_url": latest.get("web_url"),
+                "sha": latest.get("sha"),
+            }
+        except Exception as e:
+            logger.warning(
+                "Could not fetch pipeline status for %s@%s: %s", project_id, ref, e
+            )
             return None
 
     # ------------------------------------------------------------------

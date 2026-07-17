@@ -51,7 +51,7 @@ def get_credentials() -> dict:
         "gitlab_token": token,
         "git_name": name or "IssueForge User",
         "git_email": email or "issueforge@example.com",
-        "drupal_username": "",
+        "drupal_username": os.getenv("DRUPAL_USERNAME", "").strip(),
         "drupal_password": "",
     }
 
@@ -122,17 +122,27 @@ def run_interactive_setup(force: bool = False) -> dict:
     print()
 
     current_token = os.getenv("GITLAB_TOKEN", "").strip()
-    if current_token and not force:
+    if current_token:
+        # Shown regardless of --force: forcing means "let me revisit these
+        # settings" (e.g. to add a drupal.org username below), not "you
+        # must fully retype a token you already have saved." Previously
+        # this message — and the actual fallback-on-blank-input below —
+        # were both gated on `not force`, so running `setup.py --force` and
+        # pressing Enter at this prompt (the natural "keep it" gesture) was
+        # silently treated as "no token entered" and aborted the ENTIRE
+        # setup before ever reaching the drupal.org username prompt further
+        # down, even though the message told you nothing had changed.
         masked = (
             current_token[:4] + "****" + current_token[-4:]
             if len(current_token) > 8 else "****"
         )
         print(f"  Token already set ({masked}) — press Enter to keep.")
 
+    username = ""  # set below only if GitLab token validation succeeds
     while True:
         token = _prompt("  GitLab token (hidden): ", secret=True)
         if not token:
-            token = current_token if not force else ""
+            token = current_token
         if not token:
             print("  No token entered. Run setup again when you have one.")
             print("  MR detection and push will not be available.")
@@ -159,6 +169,22 @@ def run_interactive_setup(force: bool = False) -> dict:
             if ans.lower() not in ("y", "yes"):
                 print("  Setup cancelled.")
                 break
+
+    # Drupal.org (www.drupal.org) forum username — a separate account from
+    # the git.drupalcode.org GitLab identity above, needed to look up your
+    # own contribution-credit records for the dashboard. Optional: skip by
+    # pressing Enter if you don't use the credit-tracking feature.
+    current_drupal_username = os.getenv("DRUPAL_USERNAME", "").strip()
+    suggested = current_drupal_username or username
+    print()
+    print("  Drupal.org username (for the dashboard's credit tracking).")
+    print("  This is your www.drupal.org forum account — often the same as")
+    print("  your GitLab username above, but not always. Press Enter to skip.")
+    typed = _prompt(f"  Drupal.org username [{suggested or 'skip'}]: ")
+    drupal_username = typed or suggested
+    if drupal_username:
+        _persist("DRUPAL_USERNAME", drupal_username)
+        print(f"  Drupal.org username: {drupal_username}")
 
     print()
     print("[OK] Credentials saved to", CREDENTIALS_FILE)

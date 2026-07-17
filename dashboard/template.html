@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IssueForge Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>IssueForge Dashboard</h1>
+    <div class="header-actions">
+      <span class="generated-at" id="generated-at"></span>
+      <button id="refresh-btn" class="refresh-btn">Refresh</button>
+    </div>
+  </header>
+  <div id="refresh-status" class="refresh-status" style="display:none"></div>
+
+  <div class="summary-bar">
+    <div class="stat"><div class="value" id="stat-total">0</div><div class="label">Tracked issues</div></div>
+    <div class="stat"><div class="value" id="stat-new">0</div><div class="label">New activity</div></div>
+    <div class="stat"><div class="value" id="stat-red">0</div><div class="label">Red pipelines</div></div>
+    <div class="stat"><div class="value" id="stat-credited">0</div><div class="label">Credited</div></div>
+  </div>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="Search by issue #, title, project…">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="new-activity">New activity</button>
+    <button class="filter-btn" data-filter="red-pipeline">Red pipeline</button>
+    <button class="filter-btn" data-filter="open-mr">Open MR</button>
+    <button class="filter-btn" data-filter="credited">Credited</button>
+    <button class="filter-btn" data-filter="issueforge">Via IssueForge</button>
+    <button class="filter-btn" data-filter="imported">Imported credit</button>
+  </div>
+
+  <table id="issue-table">
+    <thead>
+      <tr>
+        <th data-sort="title">Issue</th>
+        <th data-sort="last_worked">Last worked</th>
+        <th data-sort="status">Status</th>
+        <th data-sort="mr">MR / Pipeline</th>
+        <th data-sort="credit">Credit</th>
+        <th data-sort="source">Source</th>
+        <th>What we did</th>
+      </tr>
+    </thead>
+    <tbody id="issue-rows"></tbody>
+  </table>
+
+  <div class="empty-state" id="empty-state" style="display:none">
+    No issues tracked yet. Run IssueForge on an issue, then
+    <code>scripts/dashboard.py record</code> to add it here — or run
+    <code>python scripts/dashboard.py import-credits</code> to seed this
+    from your drupal.org credit history.
+  </div>
+
+  <footer class="note">
+    Generated locally by IssueForge — no data leaves this machine.
+    Run <code>python scripts/dashboard.py refresh</code> to update from
+    Drupal.org and GitLab.
+  </footer>
+</div>
+
+<!--DASHBOARD_DATA_SCRIPT-->
+<script src="dashboard.js"></script>
+</body>
+</html>

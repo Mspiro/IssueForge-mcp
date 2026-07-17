@@ -19,7 +19,13 @@ def main():
     ep = plan.get("environment_plan", {})
     slim = {
         "issue_title":              plan.get("issue_title"),
-        "llm_analysis":             plan.get("llm_analysis", {}),
+        # EVIDENCE is the primary input for root-cause reasoning — its
+        # embedded "guidance" field says how to read it for this issue's
+        # category. heuristic_hints below are keyword guesses, not
+        # conclusions.
+        "evidence":                 plan.get("evidence", {}),
+        "heuristic_hints":          plan.get("heuristic_hints",
+                                             plan.get("llm_analysis", {})),
         "detected_subsystems":      plan.get("detected_subsystems", []),
         "suggested_fix_strategies": plan.get("suggested_fix_strategies", []),
         "patch_status":             plan.get("patch_status", ""),

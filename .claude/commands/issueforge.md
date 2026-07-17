@@ -41,10 +41,10 @@ After running, read the slim summary (avoids loading the full multi-KB JSON):
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/slim_plan.py env_plan_<ID>.json
 ```
-From the slim JSON, read: `llm_analysis.root_cause`, `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, `detected_subsystems`, `suggested_fix_strategies`, and `comment_signal_details` (the specific claims behind each comment signal — e.g. a commenter reporting the patch breaks tests — not just the generic label).
+From the slim JSON, start with the `evidence` block and **follow its embedded `guidance` field** — it tells you how to read the evidence for this issue's category. Also read: `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, and `comment_signal_details` (the specific claims behind each comment signal — e.g. a commenter reporting the patch breaks tests — not just the generic label). `heuristic_hints` are keyword guesses only — never present them as the root cause.
 
 Then show the user:
-- **Root cause**: what was detected
+- **Root cause**: YOUR OWN conclusion derived from `evidence` (error blocks, code refs, diff digest) — if the evidence is thin, say so explicitly and note it needs verification against the real code after provisioning
 - **Environment**: Drupal branch, PHP version, contrib modules to install
 - **Reproduction steps**: Write these yourself based on your understanding of the issue — do NOT just copy raw text from the issue. Write clear, numbered, developer-friendly steps. Each step should be a concrete action (e.g. "Go to /admin/structure/types, click Add content type, fill in Name = 'Test', save"). If the issue involves a code path or a specific trigger, name it explicitly.
 
@@ -55,6 +55,17 @@ Then ask: proceed to provision + reproduce [y], or different issue [n]?
 ! python {{ISSUEFORGE_DIR}}/scripts/provision_env.py <ISSUE_ID> env_plan_<ID>.json
 ```
 Clones Drupal, starts DDEV, installs modules. Takes 3-5 minutes.
+
+Run this **in the background**, then keep the user informed while it runs:
+the provisioner prints greppable progress markers (`[STAGE n/8] label — ~eta`).
+Poll the task's output every ~45-60 seconds with:
+```
+grep -o "\[STAGE [0-9]/8\].*" <task-output-file> | tail -1
+```
+and relay each newly reached stage to the user in one short line (e.g.
+"Provisioning: stage 4/8 — installing Composer dependencies (~1-2 min)").
+While waiting, prepare the Step 4 reproduction script. If the task finishes
+or fails, report immediately — on failure show the last 20 output lines.
 
 After provisioning succeeds, get a one-time login link:
 ```
@@ -133,19 +144,24 @@ If there are NO existing patches or MRs, or if the user requests an AI Fix, foll
 
 Step 6 (the drupal.org comment) only happens after this choice is made and acted on — or after the user explicitly says to skip it. Never draft the comment as an automatic continuation of a passing regression check.
 
+**BEFORE any push or patch export** — whichever they choose — run the
+coding-standards gate (drupal.org CI fails the whole pipeline on a single
+PHPCS violation, costing a full review round-trip):
+```
+! python {{ISSUEFORGE_DIR}}/scripts/check_cs.py <ISSUE_ID>
+```
+It checks every pending file (uncommitted + unpushed commits) in the repo
+under test, auto-fixes with phpcbf, and re-checks. If it autofixed files,
+include them in the commit. If it still fails, fix the reported violations
+first — never push a known-red pipeline.
+
 If they choose Merge Request:
 1. Tell them to open the issue page and click **"Get push access"** in the Merge Requests section (this creates their issue fork on git.drupalcode.org)
-2. Ask them to confirm once done, then run the git commands to commit and push using `!`:
-   ```
-   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> add -A
-   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> commit -m "Issue #<ISSUE_ID>: Applied fix"
-   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> push issue HEAD:<branch>
-   ```
+2. Ask them to confirm once done, then run the exact git commands printed in the NEXT STEPS block (they target the correct repo — the nested contrib clone for contrib issues — and the correct `<project>-<issue_id>` remote; do NOT improvise paths or remote names)
 3. Tell them the MR link to open once pushed.
 
-If they choose patch: 
-Run the patch save command and show them the file path:
-`! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> diff > {{ISSUEFORGE_DIR}}/environments/env_<ID>/fix_<ISSUE_ID>.patch`
+If they choose patch:
+Run the patch save command from the NEXT STEPS block and show them the file path.
 
 ### Step 6 — Generate issue comment
 
@@ -180,7 +196,7 @@ For all scenarios, the comment must:
 - Add one concrete observation if it adds value (edge case, related code path, etc.)
 - NOT repeat what other commenters already said (check RECENT_COMMENTS from Step 1)
 - NOT use filler phrases ("Great work!", "Thanks for the patch", "Hope this helps")
-- Follow Drupal.org style: plain prose, no markdown headers, use `backticks` only for function names or file paths
+- Follow Drupal.org style: plain prose, no markdown headers, NO markdown backticks — comment bodies are Filtered HTML, so wrap function names, variables, and file paths in `<code>…</code>` tags (e.g. `<code>FileThemeHooks::preprocessFileLink()</code>`). Escape literal HTML tags inside code as entities (`&lt;a&gt;`), since a bare `<a>` is parsed as a real tag and breaks rendering
 
 Present the comment in a copyable block. Then ask: "Anything to adjust before you post this?"
 

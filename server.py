@@ -78,15 +78,24 @@ class IssueForgeServer:
         final_root_signals = root_signals
         final_fix_strategies = strategy_result.get("fix_strategies", [])
 
-        # Step 7: extract comment intelligence
+        # Step 7: extract comment intelligence.
+        #
+        # Scan up to ~30 comments: fetching costs network requests, not
+        # tokens — only the ranked evidence that survives the byte budget is
+        # ever emitted. A narrow 9-comment sample misses error reports that
+        # sit mid-thread on long issues (e.g. comment #47 of 155).
         comment_ids = metadata.get("comment_ids", [])
         comment_bodies = []
         if comment_ids:
-            sample_ids = (
-                comment_ids[:3]
-                + comment_ids[len(comment_ids) // 2: len(comment_ids) // 2 + 3]
-                + comment_ids[-3:]
-            )
+            if len(comment_ids) <= 30:
+                sample_ids = list(comment_ids)
+            else:
+                first = comment_ids[:5]
+                last = comment_ids[-10:]
+                middle_pool = comment_ids[5:-10]
+                step = max(1, len(middle_pool) // 15)
+                middle = middle_pool[::step][:15]
+                sample_ids = first + middle + last
             comments = self.comment_client.get_multiple_comments(sample_ids)
             comment_bodies = [
                 c["body_html"] for c in comments if c.get("body_html")
@@ -166,7 +175,30 @@ class IssueForgeServer:
         context["reproduction_steps"] = reproduction_steps
         context["reproduction_script"] = reproduction_script
         context["detected_mrs"] = detected_mrs
-        context["llm_analysis"] = {
+
+        # Evidence bundle — the primary input for root-cause reasoning by
+        # the model driving the skill. The heuristic classifiers above are
+        # keyword lookups and are surfaced only as hints.
+        best_patch_id = patch_analysis.get("patch_id")
+        diff_text = ""
+        if best_patch_id:
+            import os
+            diff_path = f"temp_patch_{best_patch_id}.diff"
+            if os.path.exists(diff_path):
+                try:
+                    with open(diff_path, errors="ignore") as f:
+                        diff_text = f.read()
+                except OSError:
+                    pass
+        from services.evidence_extractor import EvidenceExtractor
+        context["evidence"] = EvidenceExtractor.build(
+            metadata, comment_bodies, diff_text
+        )
+
+        # Keyword-lookup output — hints only, never conclusions. Kept under
+        # the legacy "llm_analysis" key too so skill snapshots installed
+        # before the rename keep working.
+        context["heuristic_hints"] = {
             # RootCauseDetector.detect() returns "root_cause_signals" (a
             # list), never a "root_cause" key — reading .get("root_cause")
             # here always silently returned "" regardless of what was
@@ -181,5 +213,6 @@ class IssueForgeServer:
             "risk_level": patch_plan.get("risk_level", "medium"),
             "confidence": root_cause_result.get("confidence", "medium"),
         }
+        context["llm_analysis"] = context["heuristic_hints"]
 
         return context

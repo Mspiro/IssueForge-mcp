@@ -312,6 +312,20 @@ class EnvironmentProvisioner:
             EnvironmentProvisioner._cleanup(env_name, env_path)
             raise
 
+    # Total user-visible stages printed by _provision_full — keep in sync
+    # with the _stage() calls below. Stage lines are greppable
+    # ("[STAGE n/8] label — ~duration") so a caller running provisioning in
+    # the background can poll the output file and relay live progress.
+    TOTAL_STAGES = 8
+
+    @staticmethod
+    def _stage(n: int, label: str, eta: str = ""):
+        suffix = f" — {eta}" if eta else ""
+        print(
+            f"\n[STAGE {n}/{EnvironmentProvisioner.TOTAL_STAGES}] {label}{suffix}",
+            flush=True,
+        )
+
     @staticmethod
     def _provision_full(
         issue_id: str,
@@ -335,6 +349,7 @@ class EnvironmentProvisioner:
         # 2. Clone Drupal
         repo = env_plan.get("repository", "https://git.drupalcode.org/project/drupal.git")
         clone_depth = str(PROVISIONER_CLONE_DEPTH)
+        EnvironmentProvisioner._stage(1, f"Cloning Drupal core ({checkout_ref})", "~1 min")
         print(f"Cloning Drupal ({checkout_ref}, depth={clone_depth}) into {env_path}...")
         if not EnvironmentProvisioner.run_command(
             ["git", "clone", "--branch", checkout_ref, "--depth", clone_depth, repo, env_path],
@@ -349,6 +364,9 @@ class EnvironmentProvisioner:
         own_dependencies = []
         module_path = None
         if is_contrib and project_name != "drupal":
+            EnvironmentProvisioner._stage(
+                2, f"Cloning contrib module '{project_name}' + detecting its dependencies"
+            )
             contrib_dir = os.path.join(env_path, "modules", "contrib")
             os.makedirs(contrib_dir, exist_ok=True)
             contrib_repo = f"https://git.drupalcode.org/project/{project_name}.git"
@@ -375,7 +393,10 @@ class EnvironmentProvisioner:
             EnvironmentProvisioner._add_composer_replace(env_path, project_name)
 
         # 3. Configure DDEV
+        if not (is_contrib and project_name != "drupal"):
+            EnvironmentProvisioner._stage(2, "Contrib module setup (skipped — core issue)")
         project_type = env_plan.get("project_type", "drupal11")
+        EnvironmentProvisioner._stage(3, "Configuring and starting DDEV", "~30s")
         print("Configuring DDEV...")
         if not EnvironmentProvisioner.run_command(
             ["ddev", "config", f"--project-type={project_type}",
@@ -393,6 +414,7 @@ class EnvironmentProvisioner:
             raise RuntimeError("Failed to start DDEV.")
 
         # 5. Composer install
+        EnvironmentProvisioner._stage(4, "Installing Composer dependencies", "~1-2 min")
         print("Installing Composer dependencies...")
         if not EnvironmentProvisioner.run_command(
             ["ddev", "composer", "install"], cwd=env_path, timeout=PROVISIONER_COMMAND_TIMEOUT
@@ -402,6 +424,7 @@ class EnvironmentProvisioner:
         is_drupal7 = project_type == "drupal7" or checkout_ref.startswith("7")
 
         # 6. Install Drush (Drupal 8+)
+        EnvironmentProvisioner._stage(5, "Installing Drush", "~30s")
         if not is_drupal7:
             print("Installing Drush...")
             drush_ok = EnvironmentProvisioner.run_command(
@@ -418,6 +441,9 @@ class EnvironmentProvisioner:
 
         # 7. Drush site install
         install_profile = env_plan.get("install_profile", "standard")
+        EnvironmentProvisioner._stage(
+            6, f"Installing Drupal site (profile: {install_profile}) + recipe", "~1-2 min"
+        )
         print(f"Installing Drupal site (profile: {install_profile})...")
         if not EnvironmentProvisioner.run_command(
             ["ddev", "drush", "si", install_profile, "-y"],
@@ -439,6 +465,7 @@ class EnvironmentProvisioner:
             EnvironmentProvisioner._apply_profile_recipe(env_path, install_profile)
 
         # 8. Download and enable contrib modules
+        EnvironmentProvisioner._stage(7, "Downloading and enabling modules/themes")
         contrib_modules = env_plan.get("contrib_modules", [])
         if own_dependencies:
             contrib_modules = list(dict.fromkeys(contrib_modules + own_dependencies))
@@ -503,6 +530,7 @@ class EnvironmentProvisioner:
                 cwd=env_path, timeout=30,
             )
 
+        EnvironmentProvisioner._stage(8, "Git workspace + issue fork remote")
         # 12. Set up git workspace: identity + working branch.
         #
         # For contrib issues the repo under test is the nested clone at

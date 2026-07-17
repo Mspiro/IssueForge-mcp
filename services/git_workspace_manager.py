@@ -148,6 +148,79 @@ class GitWorkspaceManager:
         return True
 
     @staticmethod
+    def _find_ddev_root(path: str) -> str:
+        """Walk up from path to the directory holding .ddev (the Drupal root)."""
+        current = os.path.abspath(path)
+        for _ in range(8):
+            if os.path.isdir(os.path.join(current, ".ddev")):
+                return current
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return path
+
+    @staticmethod
+    def files_pending_submission(env_path: str) -> List[str]:
+        """
+        Repo-relative paths of everything that would leave this machine on
+        the next push/patch: uncommitted changes (staged + unstaged) plus
+        commits not yet on the upstream branch (when an upstream exists).
+        """
+        files = set()
+        for args in (
+            ["diff", "--name-only", "HEAD"],
+            ["diff", "--name-only", "--cached"],
+        ):
+            out = GitWorkspaceManager._git(args, env_path).stdout
+            files.update(f for f in out.splitlines() if f.strip())
+        upstream = GitWorkspaceManager._git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            env_path,
+        )
+        if upstream.returncode == 0 and upstream.stdout.strip():
+            out = GitWorkspaceManager._git(
+                ["diff", "--name-only", f"{upstream.stdout.strip()}..HEAD"],
+                env_path,
+            ).stdout
+            files.update(f for f in out.splitlines() if f.strip())
+        return sorted(files)
+
+    @staticmethod
+    def run_coding_standards_gate(env_path: str, ddev_root: str = "") -> bool:
+        """
+        Pre-submission PHPCS gate: check the pending files, autofix with
+        phpcbf, re-check. Returns True when clean (or nothing to lint /
+        toolchain unavailable); False when violations remain after autofix.
+
+        ddev_root: the directory DDEV commands run from (the Drupal root).
+        For contrib work_roots this differs from env_path — file paths are
+        re-anchored onto it so phpcs inside the container can find them.
+        """
+        from services.coding_standards_checker import CodingStandardsChecker
+
+        pending = GitWorkspaceManager.files_pending_submission(env_path)
+        root = ddev_root or env_path
+        if os.path.realpath(root) != os.path.realpath(env_path):
+            prefix = os.path.relpath(env_path, root)
+            pending = [os.path.join(prefix, f) for f in pending]
+
+        result = CodingStandardsChecker.check_and_fix(root, pending)
+        if result.get("skipped_reason"):
+            print(f"  [CS] Skipped: {result['skipped_reason']}")
+            return True
+        if result.get("autofixed"):
+            print("  [CS] phpcbf auto-fixed coding-standards violations "
+                  "(now part of your working tree).")
+        if result["passed"]:
+            print(f"  [CS] PHPCS clean ({len(result['checked'])} file(s)).")
+            return True
+        print("  [CS] PHPCS violations remain after autofix:")
+        for line in result["output"].splitlines()[-25:]:
+            print(f"    {line}")
+        return False
+
+    @staticmethod
     def issue_remote_name(project: str, issue_id: str) -> str:
         """
         The remote name drupal.org's own "Get push access" instructions use:
@@ -544,6 +617,25 @@ class GitWorkspaceManager:
 
         patch_path = os.path.join(env_path, patch_filename)
 
+        # Coding-standards gate — a patch with PHPCS violations fails the
+        # drupal.org pipeline the moment anyone applies it in an MR.
+        print("\n  Running coding-standards gate (phpcs + autofix)…")
+        cs_clean = GitWorkspaceManager.run_coding_standards_gate(
+            env_path, GitWorkspaceManager._find_ddev_root(env_path)
+        )
+        if not cs_clean:
+            try:
+                answer = input(
+                    "  PHPCS violations remain. Generate the patch anyway? "
+                    "[y/N]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Cancelled.")
+                return False
+            if answer not in ("y", "yes"):
+                print("  Patch generation cancelled.")
+                return False
+
         print(f"\n  Generating patch → {patch_path}")
         if not DrupalPatchUploader.generate_patch(env_path, patch_path):
             print("  [ERROR] No diff found — nothing to save.")
@@ -671,6 +763,28 @@ class GitWorkspaceManager:
             print()
 
         print(sep)
+
+        # ---- Coding-standards gate (before commit, so autofixes ride along)
+        print()
+        print("  Running coding-standards gate (phpcs + autofix)…")
+        cs_clean = GitWorkspaceManager.run_coding_standards_gate(
+            env_path, GitWorkspaceManager._find_ddev_root(env_path)
+        )
+        if not cs_clean:
+            try:
+                answer = input(
+                    "  PHPCS violations remain — the drupal.org pipeline WILL "
+                    "fail. Push anyway? [y/N]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Cancelled.")
+                return False
+            if answer not in ("y", "yes"):
+                print("  Push cancelled — fix the violations above and retry.")
+                return False
+        # Refresh uncommitted state: phpcbf may have modified files.
+        status = GitWorkspaceManager._git(["status", "--short"], env_path)
+        uncommitted = [l for l in status.stdout.splitlines() if l.strip()]
 
         # ---- Commit step (only when there are uncommitted changes) ---------
         commit_msg = ""

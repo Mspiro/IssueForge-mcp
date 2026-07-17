@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import subprocess
 from typing import Dict
@@ -145,29 +146,98 @@ class EnvironmentProvisioner:
                 logger.warning("Could not remove %s: %s", env_path, e)
 
     @staticmethod
-    def _detect_own_contrib_dependencies(module_path: str) -> list:
+    def _detect_own_contrib_dependencies(module_path: str, project_name: str = "") -> list:
         """
-        Read a git-cloned contrib project's own composer.json (if present)
-        and return the machine names of any "drupal/*" packages it requires.
+        Detect the git-cloned contrib project's own module dependencies so
+        they can be composer-required (the project itself bypasses Composer).
+
+        Two sources, merged:
+        1. composer.json "require" entries under the drupal/ namespace.
+        2. info.yml `dependencies:` entries — the fallback for the many
+           contrib modules that declare dependencies only in info.yml
+           (entries look like "key:key", "drupal:views", or bare "token";
+           the part before the colon is the drupal.org project name, and a
+           "drupal:" prefix means a core module, never a contrib project).
         """
+        import json
+        from services.module_requirement_detector import ModuleRequirementDetector
+
+        found = []
+
         composer_json_path = os.path.join(module_path, "composer.json")
-        if not os.path.isfile(composer_json_path):
-            return []
+        if os.path.isfile(composer_json_path):
+            try:
+                with open(composer_json_path) as f:
+                    data = json.load(f)
+                found.extend(
+                    package.split("/", 1)[1]
+                    for package in data.get("require", {})
+                    if package.startswith("drupal/")
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not parse composer.json at %s: %s", composer_json_path, e
+                )
+
+        info_yml_path = os.path.join(module_path, f"{project_name}.info.yml")
+        if project_name and os.path.isfile(info_yml_path):
+            try:
+                with open(info_yml_path) as f:
+                    lines = f.read().splitlines()
+                in_deps = False
+                for line in lines:
+                    if re.match(r"^dependencies:\s*$", line):
+                        in_deps = True
+                        continue
+                    if in_deps:
+                        item = re.match(r"^\s+-\s+['\"]?([\w:]+)['\"]?\s*$", line)
+                        if not item:
+                            in_deps = False  # end of the dependencies block
+                            continue
+                        dep_project = item.group(1).split(":", 1)[0]
+                        if dep_project == "drupal":
+                            continue  # core module namespace
+                        if not ModuleRequirementDetector.is_contrib(dep_project):
+                            continue
+                        found.append(dep_project)
+            except Exception as e:
+                logger.warning(
+                    "Could not parse info.yml at %s: %s", info_yml_path, e
+                )
+
+        deduped = list(dict.fromkeys(found))
+        if project_name in deduped:
+            deduped.remove(project_name)
+        return deduped
+
+    @staticmethod
+    def _add_composer_replace(env_path: str, project_name: str) -> bool:
+        """
+        Mark the git-cloned contrib project as already-provided in the site's
+        composer.json ("replace": {"drupal/<name>": "*"}).
+
+        Without this, a later `composer require` of any package that depends
+        on the project (e.g. drupal/sodium depending on drupal/encrypt)
+        silently overwrites the git clone at modules/contrib/<name> with a
+        tagged release — destroying the dev-branch checkout, the issue-fork
+        remote, and any applied patch.
+        """
+        import json
+        composer_json_path = os.path.join(env_path, "composer.json")
         try:
-            import json
             with open(composer_json_path) as f:
                 data = json.load(f)
-            requires = data.get("require", {})
-            return [
-                package.split("/", 1)[1]
-                for package in requires
-                if package.startswith("drupal/")
-            ]
+            data.setdefault("replace", {})[f"drupal/{project_name}"] = "*"
+            with open(composer_json_path, "w") as f:
+                json.dump(data, f, indent=4)
+                f.write("\n")
+            return True
         except Exception as e:
             logger.warning(
-                "Could not parse composer.json at %s: %s", composer_json_path, e
+                "Could not add composer replace entry for drupal/%s: %s",
+                project_name, e,
             )
-            return []
+            return False
 
     @staticmethod
     def _filter_existing_modules(modules: list) -> list:
@@ -277,6 +347,7 @@ class EnvironmentProvisioner:
         project_name = env_plan.get("project_name", "drupal")
         contrib_branch = env_plan.get("contrib_branch")
         own_dependencies = []
+        module_path = None
         if is_contrib and project_name != "drupal":
             contrib_dir = os.path.join(env_path, "modules", "contrib")
             os.makedirs(contrib_dir, exist_ok=True)
@@ -296,8 +367,12 @@ class EnvironmentProvisioner:
             # otherwise be silently missing, and `drush en` fails with
             # "is missing its dependency module ...".
             own_dependencies = EnvironmentProvisioner._detect_own_contrib_dependencies(
-                module_path
+                module_path, project_name
             )
+            # And protect the clone from Composer: without a "replace" entry,
+            # requiring any package that depends on this project would
+            # overwrite the git checkout with a tagged release.
+            EnvironmentProvisioner._add_composer_replace(env_path, project_name)
 
         # 3. Configure DDEV
         project_type = env_plan.get("project_type", "drupal11")
@@ -428,10 +503,16 @@ class EnvironmentProvisioner:
                 cwd=env_path, timeout=30,
             )
 
-        # 12. Set up git workspace: identity + working branch
+        # 12. Set up git workspace: identity + working branch.
+        #
+        # For contrib issues the repo under test is the nested clone at
+        # modules/contrib/<project> (it has its own .git) — NOT the outer
+        # Drupal core clone. Branching/remoting the core repo would make
+        # every later diff, commit, and push target the wrong repository.
         from services.git_workspace_manager import GitWorkspaceManager
+        work_root = module_path if module_path else env_path
         workspace = GitWorkspaceManager.setup_workspace(
-            env_path, issue_id, git_name, git_email
+            work_root, issue_id, git_name, git_email
         )
         if workspace.get("warnings"):
             for w in workspace["warnings"]:
@@ -440,7 +521,7 @@ class EnvironmentProvisioner:
         # 13. Add Drupal.org issue fork as the 'issue' remote and fetch
         #     existing branches if any contributor already pushed work.
         fork_info = GitWorkspaceManager.setup_issue_remote(
-            env_path, project_name, issue_id
+            work_root, project_name, issue_id
         )
         if fork_info.get("fetched") and fork_info.get("remote_branches"):
             print(
@@ -450,18 +531,21 @@ class EnvironmentProvisioner:
         else:
             # Fork doesn't exist yet — wait for user to click Get Push Access
             GitWorkspaceManager.wait_for_fork(
-                env_path, project_name, issue_id
+                work_root, project_name, issue_id
             )
 
         site_url = f"https://{env_name}.ddev.site"
         print(f"\nEnvironment successfully created! Access url: {site_url}")
         print(f"Working branch: {workspace['branch']}")
-        print(f"Push command:   {GitWorkspaceManager.get_push_command(env_path)}\n")
+        if work_root != env_path:
+            print(f"Working repo:   {work_root}")
+        print(f"Push command:   {GitWorkspaceManager.get_push_command(work_root)}\n")
 
         return {
             "success": True,
             "env_name": env_name,
             "env_path": env_path,
+            "work_root": work_root,
             "site_url": site_url,
             "reused": False,
             "branch": workspace["branch"],

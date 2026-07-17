@@ -20,6 +20,7 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,6 +36,38 @@ from config import ENVIRONMENTS_DIR
 
 def _env_path(issue_id: str) -> str:
     return os.path.join(ENVIRONMENTS_DIR, f"env_{issue_id}")
+
+
+def _changed_files_from_diff(diff_path: str) -> list:
+    """
+    Extract changed file paths from a unified diff ("+++ b/<path>" lines).
+    Used in --checkout mode, where the MR's changes are commits rather than
+    a working-tree diff, so `git status` can't list them (and the shallow
+    clone may not contain the merge-base needed for `git diff base...HEAD`).
+    """
+    files = []
+    try:
+        with open(diff_path, errors="ignore") as f:
+            for line in f:
+                if line.startswith("+++ b/"):
+                    files.append(line[6:].strip().split("\t")[0])
+    except OSError:
+        pass
+    return files
+
+
+def _to_env_relative(changed_files: list, env_path: str, target_root: str) -> list:
+    """
+    Re-anchor repo-relative paths from the nested contrib clone onto the
+    Drupal root (e.g. "src/EncryptService.php" →
+    "modules/contrib/encrypt/src/EncryptService.php"), so the regression
+    checker's path heuristics and PHPUnit invocations (which run from the
+    Drupal root) can see them.
+    """
+    if os.path.realpath(target_root) == os.path.realpath(env_path):
+        return changed_files
+    prefix = os.path.relpath(target_root, env_path)
+    return [os.path.join(prefix, f) for f in changed_files]
 
 
 def apply_and_check(
@@ -55,26 +88,94 @@ def apply_and_check(
 
     print(f"[OK] Applied successfully.")
 
-    # Show git diff stat so user sees what changed
-    status = GitWorkspaceManager.get_status(env_path)
+    # Diff/status must come from the repo the patch landed in — for contrib
+    # issues that's the nested modules/contrib/<name> clone, not the outer
+    # core repo (whose diff would only show composer/scaffold noise).
+    target_root = apply_result.get("target_root", env_path)
+    status = GitWorkspaceManager.get_status(target_root)
     if status["diff_stat"]:
         print("\n--- Changes applied ---")
         print(status["diff_stat"])
         print("-----------------------")
 
     if not run_regression:
-        return {"applied": True, "label": label, "regression": None}
+        return {"applied": True, "label": label, "regression": None,
+                "target_root": target_root}
 
     print("\n[Regression] Running checks...")
-    reg_results = RegressionChecker.run_all(env_path, status["changed_files"])
+    env_relative_files = _to_env_relative(
+        status["changed_files"], env_path, target_root
+    )
+    reg_results = RegressionChecker.run_all(env_path, env_relative_files)
     print(RegressionChecker.format_report(reg_results))
 
     return {
         "applied": True,
         "label": label,
-        "changed_files": status["changed_files"],
+        "changed_files": env_relative_files,
         "regression": reg_results,
+        "target_root": target_root,
     }
+
+
+def checkout_and_check(
+    env_path: str,
+    diff_path: str,
+    mr_details: dict,
+    label: str,
+    run_regression: bool,
+) -> dict:
+    """
+    Check out the MR's own branch from the issue fork (the drupal.org flow
+    for updating an existing MR), then run regression checks on it.
+    The downloaded diff is used only to list the MR's changed files.
+    """
+    source_branch = mr_details.get("source_branch")
+    if not source_branch:
+        print("[FAIL] MR details unavailable (no source branch) — cannot checkout.")
+        return {"applied": False, "label": label,
+                "error": "No source branch in MR details."}
+
+    print(f"\n[Checkout] {label} — branch '{source_branch}'")
+
+    target_root = PatchApplier._get_apply_cwd(env_path, diff_path)
+    remote = GitWorkspaceManager.find_issue_remote(target_root)
+    if not remote:
+        print("[FAIL] No issue-fork remote found in the target repo. "
+              "Provision the environment first (it sets up the remote).")
+        return {"applied": False, "label": label,
+                "error": "Issue fork remote not found."}
+
+    co = GitWorkspaceManager.checkout_mr_branch(target_root, remote, source_branch)
+    if not co["success"]:
+        print(f"[FAIL] Could not check out '{source_branch}': {co['message']}")
+        return {"applied": False, "label": label, "error": co["message"]}
+
+    print(f"[OK] On branch '{source_branch}' (tracking {remote}/{source_branch}).")
+    print("     Commits made here land on the existing MR when pushed.")
+
+    subprocess.run(["ddev", "drush", "cr"], cwd=env_path,
+                   capture_output=True, text=True)
+
+    result = {
+        "applied": True,
+        "label": label,
+        "target_root": target_root,
+        "mode": "checkout",
+    }
+    if not run_regression:
+        result["regression"] = None
+        return result
+
+    print("\n[Regression] Running checks...")
+    changed = _changed_files_from_diff(diff_path)
+    env_relative_files = _to_env_relative(changed, env_path, target_root)
+    reg_results = RegressionChecker.run_all(env_path, env_relative_files)
+    print(RegressionChecker.format_report(reg_results))
+
+    result["changed_files"] = env_relative_files
+    result["regression"] = reg_results
+    return result
 
 
 def main():
@@ -90,7 +191,16 @@ def main():
                        help="Apply all MRs detected in env_plan.json")
     parser.add_argument("--no-regression", action="store_true",
                         help="Skip regression checks")
+    parser.add_argument("--checkout", action="store_true",
+                        help="With --mr-url: check out the MR's own branch "
+                             "(tracking the issue fork) instead of applying "
+                             "its diff — required to UPDATE an existing MR, "
+                             "since commits then land on the MR branch itself")
     args = parser.parse_args()
+
+    if args.checkout and not args.mr_url:
+        print("Error: --checkout requires --mr-url", file=sys.stderr)
+        sys.exit(1)
 
     env_path = _env_path(args.issue_id)
     if not os.path.exists(env_path):
@@ -127,8 +237,16 @@ def main():
 
         details = mr_client.get_mr_details(project, mr_iid) or {}
         label = f"MR !{mr_iid} — {details.get('title', 'untitled')} [{details.get('state', '?')}]"
-        results.append(apply_and_check(env_path, diff_path, args.issue_id, label,
-                                       not args.no_regression))
+
+        if args.checkout:
+            result = checkout_and_check(env_path, diff_path, details, label,
+                                        not args.no_regression)
+        else:
+            result = apply_and_check(env_path, diff_path, args.issue_id, label,
+                                     not args.no_regression)
+        result["mr_iid"] = mr_iid
+        result["mr_source_branch"] = details.get("source_branch")
+        results.append(result)
 
     # ------------------------------------------------------------------
     # Case 2: patch by ID
@@ -164,8 +282,12 @@ def main():
                     print(f"[Skip] Could not download diff for MR !{mr_iid}")
                     continue
             label = f"MR !{mr_iid} ({project}) — {mr.get('title', 'untitled')}"
-            results.append(apply_and_check(env_path, diff_path, args.issue_id, label,
-                                           not args.no_regression))
+            details = mr_client.get_mr_details(project, mr_iid) or {}
+            result = apply_and_check(env_path, diff_path, args.issue_id, label,
+                                     not args.no_regression)
+            result["mr_iid"] = mr_iid
+            result["mr_source_branch"] = details.get("source_branch")
+            results.append(result)
 
     # Summary
     applied = sum(1 for r in results if r.get("applied"))
@@ -179,26 +301,30 @@ def main():
         for r in results
     )
 
-    # Show the environment git state so the user can verify what happened
-    status = GitWorkspaceManager.get_status(env_path)
+    # Show the git state of the repo the patch actually landed in — the
+    # nested contrib clone for contrib issues, the core repo otherwise.
+    work_root = next(
+        (r["target_root"] for r in results if r.get("target_root")), env_path
+    )
+    status = GitWorkspaceManager.get_status(work_root)
     branch = GitWorkspaceManager._git(
-        ["rev-parse", "--abbrev-ref", "HEAD"], env_path
+        ["rev-parse", "--abbrev-ref", "HEAD"], work_root
     ).stdout.strip() or "issue-work"
 
-    git_status = GitWorkspaceManager._git(["status", "--short"], env_path).stdout.strip()
+    git_status = GitWorkspaceManager._git(["status", "--short"], work_root).stdout.strip()
     git_log = GitWorkspaceManager._git(
-        ["log", "--oneline", "-5"], env_path
+        ["log", "--oneline", "-5"], work_root
     ).stdout.strip()
-    git_remotes = GitWorkspaceManager._git(["remote", "-v"], env_path).stdout.strip()
+    git_remotes = GitWorkspaceManager._git(["remote", "-v"], work_root).stdout.strip()
 
     print()
     print("=" * 65)
     print("  ENVIRONMENT GIT STATE")
-    print("  (This is the Drupal repo inside the environment,")
+    print("  (This is the repo under test inside the environment,")
     print("   separate from IssueForge itself)")
     print("=" * 65)
     print(f"  Branch  : {branch}")
-    print(f"  Path    : {env_path}")
+    print(f"  Path    : {work_root}")
     print()
     if git_status:
         print("  Changed files (not yet committed):")
@@ -219,24 +345,51 @@ def main():
     print("=" * 65)
 
     issue_page = f"https://www.drupal.org/project/drupal/issues/{args.issue_id}"
+    issue_remote = GitWorkspaceManager.find_issue_remote(work_root) or "<remote>"
+    mr_updates = [
+        (r["mr_iid"], r["mr_source_branch"])
+        for r in results
+        if r.get("applied") and r.get("mr_source_branch")
+    ]
+    on_mr_branch = any(r.get("mode") == "checkout" for r in results)
     print()
     print("=" * 65)
     print("  NEXT STEPS")
     print("=" * 65)
-    if status["has_changes"]:
+    if on_mr_branch:
+        # We're ON the MR's own branch — commits here update the MR directly.
+        print(f"  Issue page : {issue_page}")
+        print()
+        print(f"  You are on the MR's own branch ('{branch}').")
+        print("  After making and testing changes, publish them to the MR:")
+        print(f"       git -C {work_root} add -A")
+        print(f"       git -C {work_root} commit -m 'Address review feedback'")
+        print(f"       git -C {work_root} push {issue_remote} {branch}")
+    elif status["has_changes"]:
         print(f"  Issue page : {issue_page}")
         print()
         print("  To submit as a Merge Request:")
         print("    1. Open the issue page above")
         print("    2. Scroll to 'Merge requests' section")
         print("    3. Click 'Get push access' (creates your issue fork)")
-        print("    4. Then push:")
-        print(f"       git -C {env_path} add -A")
-        print(f"       git -C {env_path} commit -m 'Apply fix for #{args.issue_id}'")
-        print(f"       git -C {env_path} push issue HEAD:{branch}")
+        print("    4. Then commit:")
+        print(f"       git -C {work_root} add -A")
+        print(f"       git -C {work_root} commit -m 'Apply fix for #{args.issue_id}'")
+        print()
+        print("  To push as a NEW branch (opens a new MR):")
+        print(f"       git -C {work_root} push --set-upstream {issue_remote} HEAD")
+        for mr_iid, source_branch in mr_updates:
+            print()
+            print(f"  NOTE: to update the EXISTING MR !{mr_iid} instead, your")
+            print(f"  commits must be on its branch ('{source_branch}') — this")
+            print(f"  work branch has diverged history, so HEAD:{source_branch}")
+            print("  would be rejected. Re-run with --checkout to work on the")
+            print("  MR's own branch:")
+            print(f"       python scripts/apply_mr.py {args.issue_id} "
+                  f"--mr-url <MR_URL> --checkout")
         print()
         print("  Or to save as a patch file:")
-        print(f"       git -C {env_path} diff HEAD > {args.issue_id}.patch")
+        print(f"       git -C {work_root} diff HEAD > {args.issue_id}.patch")
     else:
         print("  No uncommitted changes — nothing to submit.")
     print("=" * 65)

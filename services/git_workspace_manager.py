@@ -21,6 +21,11 @@ from config import PROVISIONER_BRANCH_PATTERN
 logger = logging.getLogger("IssueForge.GitWorkspaceManager")
 
 _ISSUE_FORK_BASE = "https://git.drupalcode.org/issue"
+# Pushing needs authentication. Anonymous HTTPS can fetch a public fork but
+# can never push, so the push URL uses the SSH form — the exact one shown in
+# the issue page's "Get push access" command block (host git.drupal.org, not
+# git.drupalcode.org), authenticated by the contributor's GitLab SSH key.
+_ISSUE_FORK_SSH_BASE = "git@git.drupal.org:issue"
 
 
 class GitWorkspaceManager:
@@ -143,44 +148,148 @@ class GitWorkspaceManager:
         return True
 
     @staticmethod
+    def issue_remote_name(project: str, issue_id: str) -> str:
+        """
+        The remote name drupal.org's own "Get push access" instructions use:
+        "<project>-<issue_id>" (e.g. "encrypt-2915538"). Matching it means
+        every command IssueForge prints can be cross-checked 1:1 against the
+        command block on the issue page.
+        """
+        return f"{project}-{issue_id}"
+
+    @staticmethod
+    def find_issue_remote(env_path: str) -> Optional[str]:
+        """
+        Find the issue-fork remote by URL rather than by name, so both the
+        canonical "<project>-<issue_id>" name and the legacy "issue" name
+        (environments provisioned by older IssueForge versions) are found.
+        """
+        result = GitWorkspaceManager._git(["remote", "-v"], env_path)
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and "/issue/" in parts[1]:
+                return parts[0]
+        return None
+
+    @staticmethod
+    def checkout_mr_branch(env_path: str, remote_name: str, branch: str) -> Dict:
+        """
+        Check out an existing MR's source branch from the issue fork, exactly
+        like the issue page instructs:
+            git checkout -b '<branch>' --track '<remote>/<branch>'
+
+        This is the only correct way to UPDATE an existing MR: a locally
+        created work branch has diverged history (the MR's changes exist
+        there as commits, locally as an applied diff), so pushing
+        HEAD:<branch> from it is rejected as non-fast-forward.
+
+        Refuses to run on a dirty tree — a checkout over uncommitted changes
+        that overlap the MR's files would either conflict or silently mix
+        states. Returns {success, branch, message}.
+        """
+        status = GitWorkspaceManager._git(["status", "--porcelain"], env_path)
+        if status.stdout.strip():
+            return {
+                "success": False,
+                "branch": branch,
+                "message": (
+                    "Working tree has uncommitted changes. Commit, stash, or "
+                    "discard them before checking out the MR branch."
+                ),
+            }
+
+        fetch = GitWorkspaceManager._git(
+            ["fetch", remote_name, "--quiet"], env_path, timeout=120
+        )
+        if fetch.returncode != 0:
+            return {
+                "success": False,
+                "branch": branch,
+                "message": f"Could not fetch {remote_name}: {fetch.stderr.strip()}",
+            }
+
+        # Existing local branch → plain checkout; otherwise create tracking.
+        exists = GitWorkspaceManager._git(
+            ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], env_path
+        )
+        if exists.returncode == 0:
+            result = GitWorkspaceManager._git(["checkout", branch], env_path)
+        else:
+            result = GitWorkspaceManager._git(
+                ["checkout", "-b", branch, "--track", f"{remote_name}/{branch}"],
+                env_path,
+            )
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "branch": branch,
+                "message": result.stderr.strip(),
+            }
+        logger.info("Checked out MR branch %s tracking %s/%s",
+                    branch, remote_name, branch)
+        return {"success": True, "branch": branch, "message": ""}
+
+    @staticmethod
     def setup_issue_remote(env_path: str, project: str, issue_id: str) -> Dict:
         """
-        Add the Drupal.org issue fork as a remote named 'issue', then try to
-        fetch any existing branches (in case a contributor already pushed work).
+        Add the Drupal.org issue fork as a remote, then try to fetch any
+        existing branches (in case a contributor already pushed work).
 
-        Issue fork URL convention:
-            https://git.drupalcode.org/issue/<project>-<issue_id>.git
+        Matches the issue page's "Get push access" command block exactly:
+            remote name: <project>-<issue_id>
+            fetch: https://git.drupalcode.org/issue/<project>-<issue_id>.git
+            push:  git@git.drupal.org:issue/<project>-<issue_id>.git
 
-        Returns a dict with remote_url, fetched (bool), remote_branches, warnings.
+        Fetch stays on anonymous HTTPS (works without any credentials); the
+        push URL is the SSH form from those instructions — anonymous HTTPS
+        pushes are always rejected, which previously made every push fail.
+
+        Returns a dict with remote_name, remote_url, push_url, fetched
+        (bool), remote_branches, warnings.
         """
+        remote_name = GitWorkspaceManager.issue_remote_name(project, issue_id)
         fork_url = f"{_ISSUE_FORK_BASE}/{project}-{issue_id}.git"
+        push_url = f"{_ISSUE_FORK_SSH_BASE}/{project}-{issue_id}.git"
         warnings = []
 
-        # Replace any stale 'issue' remote (safe on fresh envs too)
+        # Replace any stale remote (including the legacy 'issue' name used
+        # by environments provisioned before the rename).
         GitWorkspaceManager._git(["remote", "remove", "issue"], env_path)
+        GitWorkspaceManager._git(["remote", "remove", remote_name], env_path)
         add_result = GitWorkspaceManager._git(
-            ["remote", "add", "issue", fork_url], env_path
+            ["remote", "add", remote_name, fork_url], env_path
         )
         if add_result.returncode != 0:
             msg = f"Could not add issue remote: {add_result.stderr.strip()}"
             warnings.append(msg)
             logger.warning(msg)
-            return {"remote_url": fork_url, "fetched": False,
+            return {"remote_name": remote_name, "remote_url": fork_url,
+                    "push_url": push_url, "fetched": False,
                     "remote_branches": [], "warnings": warnings}
 
+        push_result = GitWorkspaceManager._git(
+            ["remote", "set-url", "--push", remote_name, push_url], env_path
+        )
+        if push_result.returncode != 0:
+            warnings.append(
+                f"Could not set SSH push URL: {push_result.stderr.strip()}"
+            )
+
         # Fetch — may fail if the fork has not been created yet; that is normal
-        fetch_result = GitWorkspaceManager._git(["fetch", "issue", "--quiet"], env_path)
+        fetch_result = GitWorkspaceManager._git(
+            ["fetch", remote_name, "--quiet"], env_path
+        )
         fetched = fetch_result.returncode == 0
 
         remote_branches: List[str] = []
         if fetched:
             ls_result = GitWorkspaceManager._git(
-                ["branch", "-r", "--list", "issue/*"], env_path
+                ["branch", "-r", "--list", f"{remote_name}/*"], env_path
             )
             for line in ls_result.stdout.splitlines():
                 b = line.strip()
-                if b.startswith("issue/"):
-                    b = b[len("issue/"):]
+                if b.startswith(f"{remote_name}/"):
+                    b = b[len(remote_name) + 1:]
                 if b:
                     remote_branches.append(b)
 
@@ -188,15 +297,17 @@ class GitWorkspaceManager:
             warnings.append(
                 "Issue fork not yet created. "
                 "On the issue page click 'Get push access' to initialise it, "
-                "then run: git push issue HEAD:<branch>"
+                f"then run: git push --set-upstream {remote_name} HEAD"
             )
 
         logger.info(
-            "Issue remote set up. fork=%s fetched=%s branches=%s",
-            fork_url, fetched, remote_branches,
+            "Issue remote set up. name=%s fork=%s push=%s fetched=%s branches=%s",
+            remote_name, fork_url, push_url, fetched, remote_branches,
         )
         return {
+            "remote_name": remote_name,
             "remote_url": fork_url,
+            "push_url": push_url,
             "fetched": fetched,
             "remote_branches": remote_branches,
             "warnings": warnings,
@@ -224,6 +335,7 @@ class GitWorkspaceManager:
           Once confirmed, a full `git fetch issue` runs to pull any branches.
         """
         fork_url = f"{_ISSUE_FORK_BASE}/{project}-{issue_id}.git"
+        remote_name = GitWorkspaceManager.issue_remote_name(project, issue_id)
         issue_page = (
             f"https://www.drupal.org/project/{project}/issues/{issue_id}"
         )
@@ -250,16 +362,18 @@ class GitWorkspaceManager:
                 )
                 if result.returncode == 0:
                     print(f"\r[Fork] Fork detected after {elapsed}s! Fetching branches…")
-                    GitWorkspaceManager._git(["fetch", "issue", "--quiet"], env_path)
+                    GitWorkspaceManager._git(
+                        ["fetch", remote_name, "--quiet"], env_path
+                    )
 
                     ls = GitWorkspaceManager._git(
-                        ["branch", "-r", "--list", "issue/*"], env_path
+                        ["branch", "-r", "--list", f"{remote_name}/*"], env_path
                     )
                     remote_branches = []
                     for line in ls.stdout.splitlines():
                         b = line.strip()
-                        if b.startswith("issue/"):
-                            b = b[len("issue/"):]
+                        if b.startswith(f"{remote_name}/"):
+                            b = b[len(remote_name) + 1:]
                         if b:
                             remote_branches.append(b)
 
@@ -288,13 +402,13 @@ class GitWorkspaceManager:
         except KeyboardInterrupt:
             print("\n[Fork] Skipped. When ready, run:")
             print(
-                f"  git -C <env_path> fetch issue && "
+                f"  git -C <env_path> fetch {remote_name} && "
                 f"{GitWorkspaceManager.get_push_command(env_path)}"
             )
             return False
 
         print(f"\n[Fork] Timed out after {timeout}s. Run manually when ready:")
-        print(f"  git fetch issue && git push issue HEAD:<branch>")
+        print(f"  git fetch {remote_name} && git push --set-upstream {remote_name} HEAD")
         return False
 
     @staticmethod
@@ -329,8 +443,7 @@ class GitWorkspaceManager:
         recent = [l for l in log_r.stdout.splitlines() if l.strip()]
 
         branch = _get_current_branch(env_path) or "unknown"
-        remotes = GitWorkspaceManager._git(["remote"], env_path).stdout.strip().splitlines()
-        remote_name = "issue" if "issue" in remotes else "origin"
+        remote_name = GitWorkspaceManager.find_issue_remote(env_path) or "origin"
         remote_url = GitWorkspaceManager._git(
             ["remote", "get-url", remote_name], env_path
         ).stdout.strip()
@@ -510,8 +623,7 @@ class GitWorkspaceManager:
         sep = "=" * W
 
         branch = _get_current_branch(env_path) or "unknown"
-        remotes = GitWorkspaceManager._git(["remote"], env_path).stdout.strip().splitlines()
-        remote_name = "issue" if "issue" in remotes else "origin"
+        remote_name = GitWorkspaceManager.find_issue_remote(env_path) or "origin"
         remote_url = GitWorkspaceManager._git(
             ["remote", "get-url", remote_name], env_path
         ).stdout.strip()
@@ -631,15 +743,18 @@ class GitWorkspaceManager:
     def get_push_command(env_path: str) -> str:
         """
         Return the git push command the user should run to open a PR.
-        Prefers the 'issue' remote (Drupal.org issue fork) when available.
+        Prefers the Drupal.org issue-fork remote when available, using the
+        same command form as the issue page's instructions.
         """
         branch = _get_current_branch(env_path) or "issue-work"
-        remotes = GitWorkspaceManager._git(["remote"], env_path).stdout.strip().splitlines()
-        if "issue" in remotes:
+        issue_remote = GitWorkspaceManager.find_issue_remote(env_path)
+        if issue_remote:
             fork_url = GitWorkspaceManager._git(
-                ["remote", "get-url", "issue"], env_path
+                ["remote", "get-url", issue_remote], env_path
             ).stdout.strip()
-            return f"git push issue HEAD:{branch}  # fork: {fork_url}"
+            return (
+                f"git push --set-upstream {issue_remote} HEAD  # fork: {fork_url}"
+            )
         remote_url = GitWorkspaceManager._git(
             ["remote", "get-url", "origin"], env_path
         ).stdout.strip()

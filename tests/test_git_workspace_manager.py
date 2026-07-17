@@ -21,7 +21,7 @@ class TestSetupIssueRemote:
             "remote remove": self._make_run(0),
             "remote add": self._make_run(0),
             "fetch": self._make_run(0),
-            "branch -r": self._make_run(0, "  issue/2692289-fix\n"),
+            "branch -r": self._make_run(0, "  drupal-2692289/2692289-fix\n"),
         }
 
         def fake_git(args, cwd, **kwargs):
@@ -39,6 +39,144 @@ class TestSetupIssueRemote:
         assert "git.drupalcode.org/issue/drupal-2692289" in result["remote_url"]
         assert result["fetched"] is True
         assert "2692289-fix" in result["remote_branches"]
+
+    def test_remote_name_matches_drupal_org_instructions(self, tmp_path):
+        # The issue page's "Get push access" block names the remote
+        # "<project>-<issue_id>" — matching it lets users cross-check every
+        # printed command against the page 1:1.
+        recorded = []
+
+        def fake_git(args, cwd, **kwargs):
+            recorded.append(args)
+            return self._make_run(0)
+
+        with patch.object(GitWorkspaceManager, "_git", side_effect=fake_git):
+            result = GitWorkspaceManager.setup_issue_remote(
+                str(tmp_path), "encrypt", "2915538"
+            )
+
+        assert result["remote_name"] == "encrypt-2915538"
+        assert ["remote", "add", "encrypt-2915538",
+                "https://git.drupalcode.org/issue/encrypt-2915538.git"] in recorded
+        # The legacy 'issue' remote from older environments is cleaned up.
+        assert ["remote", "remove", "issue"] in recorded
+
+    def test_push_url_uses_ssh_form(self, tmp_path):
+        # Regression coverage: the remote used to be HTTPS-only. Anonymous
+        # HTTPS can fetch a public fork but can never push, so every push
+        # failed. The push URL must be the exact SSH form the issue page's
+        # "Get push access" instructions show — host git.drupal.org.
+        recorded = []
+
+        def fake_git(args, cwd, **kwargs):
+            recorded.append(args)
+            return self._make_run(0)
+
+        with patch.object(GitWorkspaceManager, "_git", side_effect=fake_git):
+            result = GitWorkspaceManager.setup_issue_remote(
+                str(tmp_path), "encrypt", "2915538"
+            )
+
+        assert result["push_url"] == "git@git.drupal.org:issue/encrypt-2915538.git"
+        assert ["remote", "set-url", "--push", "encrypt-2915538",
+                "git@git.drupal.org:issue/encrypt-2915538.git"] in recorded
+        # Fetch URL stays anonymous HTTPS.
+        assert result["remote_url"].startswith("https://")
+
+    def test_find_issue_remote_by_url(self, tmp_path):
+        # Detection is by URL, not name, so both canonical and legacy
+        # ("issue") remote names from older environments are found.
+        listing = (
+            "origin\thttps://git.drupalcode.org/project/encrypt.git (fetch)\n"
+            "origin\thttps://git.drupalcode.org/project/encrypt.git (push)\n"
+            "encrypt-2915538\thttps://git.drupalcode.org/issue/encrypt-2915538.git (fetch)\n"
+            "encrypt-2915538\tgit@git.drupal.org:issue/encrypt-2915538.git (push)\n"
+        )
+        with patch.object(
+            GitWorkspaceManager, "_git",
+            return_value=self._make_run(0, listing),
+        ):
+            assert GitWorkspaceManager.find_issue_remote(str(tmp_path)) == "encrypt-2915538"
+
+    def test_find_issue_remote_none_when_absent(self, tmp_path):
+        listing = "origin\thttps://git.drupalcode.org/project/drupal.git (fetch)\n"
+        with patch.object(
+            GitWorkspaceManager, "_git",
+            return_value=self._make_run(0, listing),
+        ):
+            assert GitWorkspaceManager.find_issue_remote(str(tmp_path)) is None
+
+
+class TestCheckoutMrBranch:
+    """The drupal.org flow for updating an existing MR: work ON its branch.
+
+    A locally created work branch has diverged history from the MR branch
+    (same content, different commits), so pushing HEAD:<branch> from it is
+    rejected — tracking the MR's own branch is the only correct path.
+    """
+
+    def _make_run(self, returncode=0, stdout="", stderr=""):
+        m = MagicMock()
+        m.returncode = returncode
+        m.stdout = stdout
+        m.stderr = stderr
+        return m
+
+    def test_creates_tracking_branch_like_issue_page_instructs(self, tmp_path):
+        recorded = []
+
+        def fake_git(args, cwd, **kwargs):
+            recorded.append(args)
+            if args[:2] == ["status", "--porcelain"]:
+                return self._make_run(0, "")          # clean tree
+            if args[:2] == ["rev-parse", "--verify"]:
+                return self._make_run(1)              # no local branch yet
+            return self._make_run(0)
+
+        with patch.object(GitWorkspaceManager, "_git", side_effect=fake_git):
+            result = GitWorkspaceManager.checkout_mr_branch(
+                str(tmp_path), "encrypt-2915538", "base64"
+            )
+
+        assert result["success"] is True
+        assert ["checkout", "-b", "base64", "--track",
+                "encrypt-2915538/base64"] in recorded
+
+    def test_reuses_existing_local_branch(self, tmp_path):
+        recorded = []
+
+        def fake_git(args, cwd, **kwargs):
+            recorded.append(args)
+            if args[:2] == ["status", "--porcelain"]:
+                return self._make_run(0, "")
+            return self._make_run(0)                  # branch exists
+
+        with patch.object(GitWorkspaceManager, "_git", side_effect=fake_git):
+            result = GitWorkspaceManager.checkout_mr_branch(
+                str(tmp_path), "encrypt-2915538", "base64"
+            )
+
+        assert result["success"] is True
+        assert ["checkout", "base64"] in recorded
+
+    def test_refuses_dirty_working_tree(self, tmp_path):
+        recorded = []
+
+        def fake_git(args, cwd, **kwargs):
+            recorded.append(args)
+            if args[:2] == ["status", "--porcelain"]:
+                return self._make_run(0, " M src/EncryptService.php\n")
+            return self._make_run(0)
+
+        with patch.object(GitWorkspaceManager, "_git", side_effect=fake_git):
+            result = GitWorkspaceManager.checkout_mr_branch(
+                str(tmp_path), "encrypt-2915538", "base64"
+            )
+
+        assert result["success"] is False
+        assert "uncommitted changes" in result["message"]
+        # Never attempts a checkout over a dirty tree.
+        assert not any(a[0] == "checkout" for a in recorded)
 
     def test_graceful_when_fetch_fails(self, tmp_path):
         def fake_git(args, cwd, **kwargs):

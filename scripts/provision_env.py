@@ -35,39 +35,64 @@ def main():
         print(json.dumps(result, indent=2))
         if not result.get("success"):
             sys.exit(1)
-        _write_workspace_file(args.issue_id, result.get("env_path", ""))
+        _write_workspace_file(
+            args.issue_id,
+            result.get("env_path", ""),
+            result.get("work_root", ""),
+        )
     except Exception as e:
         print(json.dumps({"error": str(e), "success": False}))
         sys.exit(1)
 
 
-def _write_workspace_file(issue_id: str, env_path: str):
+def _write_workspace_file(issue_id: str, env_path: str, work_root: str = "",
+                          output_dir: str = ""):
     """
     Generate a .code-workspace file so the IDE shows the Drupal
     environment's git changes in its Source Control panel alongside
     the IssueForge project.
+
+    For contrib issues the repo under test is the NESTED clone at
+    modules/contrib/<project> — VS Code does not scan nested git repos
+    inside a workspace folder (and openRepositoryInParentFolders is off),
+    so unless that folder is added as its own workspace entry, the applied
+    MR/patch diff is invisible in the Source Control panel.
     """
     if not env_path or not os.path.isdir(env_path):
         return
 
     issueforge_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    folders = [
+        {
+            "path": issueforge_dir,
+            "name": "IssueForge"
+        },
+        {
+            "path": env_path,
+            "name": f"Drupal env-{issue_id} (issue #{issue_id})"
+        }
+    ]
+    if (
+        work_root
+        and os.path.isdir(work_root)
+        and os.path.realpath(work_root) != os.path.realpath(env_path)
+    ):
+        project = os.path.basename(work_root.rstrip("/"))
+        folders.append({
+            "path": work_root,
+            "name": f"{project} (issue #{issue_id} repo)"
+        })
+
     workspace = {
-        "folders": [
-            {
-                "path": issueforge_dir,
-                "name": "IssueForge"
-            },
-            {
-                "path": env_path,
-                "name": f"Drupal env-{issue_id} (issue #{issue_id})"
-            }
-        ],
+        "folders": folders,
         "settings": {
             "git.openRepositoryInParentFolders": "never"
         }
     }
 
-    workspace_file = os.path.join(issueforge_dir, f"env-{issue_id}.code-workspace")
+    workspace_file = os.path.join(
+        output_dir or issueforge_dir, f"env-{issue_id}.code-workspace"
+    )
     with open(workspace_file, "w") as f:
         json.dump(workspace, f, indent=2)
 

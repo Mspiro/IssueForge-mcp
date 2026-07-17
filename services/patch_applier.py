@@ -150,18 +150,33 @@ class PatchApplier:
                 break
 
         if winning_args is None:
-            return {"success": False, "message": "Patch cannot be applied cleanly with any strategy."}
+            return {
+                "success": False,
+                "message": "Patch cannot be applied cleanly with any strategy.",
+                "target_root": apply_cwd,
+            }
 
         result = subprocess.run(
             ["git", "apply"] + winning_args + [patch_path],
             cwd=apply_cwd, capture_output=True, text=True,
         )
         if result.returncode != 0:
-            return {"success": False, "message": result.stdout + result.stderr}
+            return {
+                "success": False,
+                "message": result.stdout + result.stderr,
+                "target_root": apply_cwd,
+            }
 
         # Cache rebuild
         subprocess.run(["ddev", "drush", "cr"], cwd=env_path, capture_output=True, text=True)
-        return {"success": True, "message": f"Applied {patch_filename} successfully."}
+        return {
+            "success": True,
+            "message": f"Applied {patch_filename} successfully.",
+            # The repo the diff actually landed in — for contrib issues this
+            # is modules/contrib/<name>, whose own git must be used for all
+            # follow-up diff/commit/push operations.
+            "target_root": apply_cwd,
+        }
 
     @staticmethod
     def apply_patch(env_path: str, patch_id: str) -> Dict:

@@ -92,16 +92,11 @@ class IssuePreviewer:
                     recent_comments.append({"date": date, "text": text[:600]})
 
         # --- MR detection ---
-        issue_body = meta.get("problem_description_html", "")
-        mrs = mr_client.detect_mr_urls_from_issue_body(issue_body)
-        mrs += mr_client.detect_mr_urls_from_comments(comment_bodies)
-        seen: set = set()
-        unique_mrs = []
-        for mr in mrs:
-            k = (mr["project"], mr["mr_iid"])
-            if k not in seen:
-                seen.add(k)
-                unique_mrs.append(mr)
+        # Goes through the shared detector (same one analyze_issue uses) so
+        # preview and analyze always agree for the same issue — it owns its
+        # own comment window rather than reusing the smaller sample above,
+        # which was too narrow to reliably catch MR mentions in long threads.
+        unique_mrs = mr_client.detect_mrs_for_issue(meta, comment_client)
 
         # Enrich MR entries with GitLab metadata when token is available
         if gitlab_token:

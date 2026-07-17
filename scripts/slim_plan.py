@@ -23,6 +23,8 @@ def main():
         "detected_subsystems":      plan.get("detected_subsystems", []),
         "suggested_fix_strategies": plan.get("suggested_fix_strategies", []),
         "patch_status":             plan.get("patch_status", ""),
+        "comment_signals":          plan.get("comment_signals", []),
+        "comment_signal_details":   plan.get("comment_signal_details", []),
         "modified_files":           plan.get("modified_files", []),
         "reproduction_steps":       plan.get("reproduction_steps", []),
         "detected_mrs":             plan.get("detected_mrs", []),

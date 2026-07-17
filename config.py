@@ -89,6 +89,33 @@ MR_DETECTION_MAX_COMMENTS = int(os.getenv("ISSUEFORGE_MR_MAX_COMMENTS", "50"))
 REGRESSION_PHPUNIT_TIMEOUT = int(os.getenv("ISSUEFORGE_PHPUNIT_TIMEOUT", "300"))
 REGRESSION_HEALTH_TIMEOUT = int(os.getenv("ISSUEFORGE_HEALTH_TIMEOUT", "30"))
 
+# Full-module regression sweep: runs a module's entire tests/src directory
+# (Kernel + Functional + Unit) when a non-test source file in that module
+# changed, since single-file heuristics can't find regressions in test
+# files the patch never touched (e.g. a behavioral change breaking an
+# unrelated, pre-existing functional test). This only costs wall-clock time
+# — no LLM call is involved in running it.
+REGRESSION_FULL_SUITE_TIMEOUT = int(os.getenv("ISSUEFORGE_FULL_SUITE_TIMEOUT", "900"))
+
+# Functional PHPUnit tests (BrowserTestBase) require these to bootstrap.
+# Defaults match DDEV's standard container conventions, so they hold for
+# any DDEV-provisioned environment without per-issue configuration.
+REGRESSION_SIMPLETEST_BASE_URL = os.getenv("ISSUEFORGE_SIMPLETEST_BASE_URL", "http://127.0.0.1")
+REGRESSION_SIMPLETEST_DB = os.getenv("ISSUEFORGE_SIMPLETEST_DB", "mysql://db:db@db/db")
+REGRESSION_BROWSERTEST_OUTPUT_DIR = os.getenv("ISSUEFORGE_BROWSERTEST_OUTPUT_DIR", "/tmp")
+
+# ---------------------------------------------------------------------------
+# Check runner (bounded fix/verify loop primitive)
+# ---------------------------------------------------------------------------
+
+# PHPStan uses the project's own config (core/phpstan.neon.dist, or a
+# contrib module's own if present) rather than a fixed --level=max — core's
+# baseline already tunes out pre-existing noise unrelated to any given
+# change; running at max level blind would surface thousands of unrelated
+# baseline errors and make the gate impossible to satisfy.
+CHECK_PHPSTAN_TIMEOUT = int(os.getenv("ISSUEFORGE_PHPSTAN_TIMEOUT", "180"))
+CHECK_BOUNDED_RETRY_MAX_ATTEMPTS = int(os.getenv("ISSUEFORGE_CHECK_MAX_ATTEMPTS", "3"))
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

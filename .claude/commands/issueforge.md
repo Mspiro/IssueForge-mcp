@@ -41,7 +41,7 @@ After running, read the slim summary (avoids loading the full multi-KB JSON):
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/slim_plan.py env_plan_<ID>.json
 ```
-From the slim JSON, read: `llm_analysis.root_cause`, `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, `detected_subsystems`, and `suggested_fix_strategies`.
+From the slim JSON, read: `llm_analysis.root_cause`, `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, `detected_subsystems`, `suggested_fix_strategies`, and `comment_signal_details` (the specific claims behind each comment signal — e.g. a commenter reporting the patch breaks tests — not just the generic label).
 
 Then show the user:
 - **Root cause**: what was detected
@@ -72,8 +72,17 @@ Write a PHP Drush script (`repro_<ID>.php`) that programmatically triggers the b
 ```
 After the script runs, tell the user exactly what to look for in the site to observe the bug (specific URL, UI element, error message, or log entry).
 
-### Step 5 — Apply and validate a patch or MR
+### Step 5 — Apply existing fix OR Generate AI Fix
 
+**Before touching any code**, explain the issue to the user in your own words (root cause + what the fix needs to do — reuse your Step 2 explanation) and ask explicitly whether they want to resolve it now, and how:
+
+- [1] Test an existing MR/patch from the plan
+- [2] Generate an AI fix (no existing patch, or existing one rejected)
+- [3] Skip fixing — reproduction only
+
+Do not auto-apply an MR/patch just because one exists in the plan. The user chooses.
+
+If they choose to test an existing MR or patch:
 Apply an MR:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --mr-url <MR_URL>
@@ -86,25 +95,61 @@ Apply all MRs from the plan:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --from-plan env_plan_<ID>.json
 ```
-Each run: applies diff → regression check (health + PHPUnit + compatibility) → shows diff stat → prints NEXT STEPS block.
+Each run: applies diff → regression check (health check + targeted PHPUnit + full-module test sweep + module compatibility) → shows diff stat → prints NEXT STEPS block. The full-module sweep runs the entire affected module's test suite whenever a non-test source file changed, not just files the patch happened to touch — this is what catches a patch breaking an unrelated, pre-existing test.
 
-After the script finishes, read the NEXT STEPS block and ask the user:
+If there are NO existing patches or MRs, or if the user requests an AI Fix, follow this loop rather than editing straight from a guess — an unstructured pass tends to only solve the happy path and miss edge cases or break unrelated behavior:
+
+1. **Edge-case check.** Grep the affected module's existing tests for assertions related to the issue's own keywords, e.g.:
+   ```
+   ! grep -rn "<keyword>" {{ISSUEFORGE_DIR}}/environments/env_<ID>/core/modules/<module>/tests
+   ```
+   If an existing assertion encodes exactly the behavior this issue is changing, note it now — it will need a matching update, not a surprise failure discovered after the fact.
+2. **Write a failing test first**, in the module's existing test style (Kernel or Functional) — this defines the bug's boundary before you write a fix for it, not after. Skip this step only when there's no reproducible code path (e.g. a pure architecture/discussion issue with nothing to test yet). Confirm it fails for the right reason:
+   ```
+   ! python {{ISSUEFORGE_DIR}}/scripts/run_check.py <ISSUE_ID> phpunit <test_file>
+   ```
+3. Review the `root_cause` and `suggested_fix_strategies` from Step 2, then implement the fix in `{{ISSUEFORGE_DIR}}/environments/env_<ID>/`.
+4. **Verify the new test now passes** with the same `run_check.py phpunit` command. Apply the bounded retry protocol below if it doesn't.
+5. **Static analysis gate.** Run PHPStan against every file you changed:
+   ```
+   ! python {{ISSUEFORGE_DIR}}/scripts/run_check.py <ISSUE_ID> phpstan <file1> <file2> ...
+   ```
+   Apply the bounded retry protocol to any errors reported.
+6. **Regression sweep.** Run the full regression check against your uncommitted changes:
+   ```
+   ! python {{ISSUEFORGE_DIR}}/scripts/check_regression.py <ISSUE_ID>
+   ```
+7. **Reviewer pass** — only when the diff touches core behavioral logic (not a one-line change) *and* step 1 found no existing test already covering it. Re-read your own diff as a skeptic: does the fix apply narrowly, or did it remove/alter behavior beyond what the issue actually asked for? (This exact mistake — removing more than the issue asked for — is what produced 5 failing tests when validating MR !13200 against #3115759.)
+8. Once everything passes, use `! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> diff` to show the user the changes.
+
+**Bounded retry protocol** (steps 4–6): if a check fails, make one fix attempt, then re-run the *same* check.
+- Passes now → continue.
+- Fails with the exact same signature as before → stop. This isn't converging — don't keep guessing. Tell the user what's stuck and what you tried.
+- Fails with a *different* signature → real progress was made, one more attempt is justified. Cap at 3 total attempts per check regardless of outcome, then stop and report to the user rather than continuing to iterate.
+
+**Gate: do not proceed to Step 6 yet.** After a fix is applied (either from an MR or generated by you) and it passes regression, stop and ask the user:
 - Do you want to submit this as a **Merge Request**?
 - Or save it as a **patch file**?
 
+Step 6 (the drupal.org comment) only happens after this choice is made and acted on — or after the user explicitly says to skip it. Never draft the comment as an automatic continuation of a passing regression check.
+
 If they choose Merge Request:
 1. Tell them to open the issue page and click **"Get push access"** in the Merge Requests section (this creates their issue fork on git.drupalcode.org)
-2. Ask them to confirm once done, then run the git commands from the NEXT STEPS block using `!`:
+2. Ask them to confirm once done, then run the git commands to commit and push using `!`:
    ```
-   ! git -C <env_path> add -A
-   ! git -C <env_path> commit -m "Apply fix for #<ISSUE_ID>"
-   ! git -C <env_path> push issue HEAD:<branch>
+   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> add -A
+   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> commit -m "Issue #<ISSUE_ID>: Applied fix"
+   ! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> push issue HEAD:<branch>
    ```
 3. Tell them the MR link to open once pushed.
 
-If they choose patch: run the patch save command from NEXT STEPS and show them the file path.
+If they choose patch: 
+Run the patch save command and show them the file path:
+`! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> diff > {{ISSUEFORGE_DIR}}/environments/env_<ID>/fix_<ISSUE_ID>.patch`
 
 ### Step 6 — Generate issue comment
+
+**Entry check**: only enter this step once regression checks have passed (or the user chose reproduction-only in Step 5) *and* the Step 5 MR/patch/skip decision has been made. If you find yourself about to draft a comment right after a regression-check output with no intervening user decision, stop and go back to that gate instead.
 
 Once the user has finished their session (tested, fixed, or reproduced), generate a comment they can post on the Drupal.org issue page.
 

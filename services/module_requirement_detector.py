@@ -1,7 +1,6 @@
 from typing import Dict, List
 
 from services.contrib_module_detector import ContribModuleDetector
-from services.test_module_detector import TestModuleDetector
 
 
 class ModuleRequirementDetector:
@@ -29,11 +28,11 @@ class ModuleRequirementDetector:
 
     @staticmethod
     def detect(metadata: Dict) -> List[str]:
-
-        contrib_modules = ContribModuleDetector.detect(metadata)
-
-        test_modules = TestModuleDetector.detect(metadata)
-
-        combined = set(contrib_modules + test_modules)
-
-        return sorted(list(combined))
+        # Note: TestModuleDetector identifies mentions of testing
+        # frameworks (PHPUnit, SimpleTest, etc.) for informational purposes
+        # only. Those are never real, composer-requireable Drupal contrib
+        # projects, so they must not be merged into the installable module
+        # list — doing so would produce a bogus `composer require
+        # drupal/phpunit` for any issue that simply discusses test results
+        # in prose (which is most core issues).
+        return sorted(ContribModuleDetector.detect(metadata))

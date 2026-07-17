@@ -20,7 +20,7 @@ import requests
 import time
 from typing import Dict, List, Optional
 
-from config import GITLAB_API_BASE, GITLAB_HOST, DRUPAL_API_RETRIES
+from config import GITLAB_API_BASE, GITLAB_HOST, DRUPAL_API_RETRIES, MR_DETECTION_MAX_COMMENTS
 
 logger = logging.getLogger("IssueForge.GitlabMrClient")
 
@@ -72,6 +72,43 @@ class GitlabMrClient:
     def detect_mr_urls_from_issue_body(self, issue_html: str) -> List[Dict]:
         """Scan the issue description itself for MR URLs."""
         return self.detect_mr_urls_from_comments([issue_html or ""])
+
+    def detect_mrs_for_issue(self, metadata: Dict, comment_client) -> List[Dict]:
+        """
+        Detect MRs for an issue, given its full metadata dict.
+
+        This is the single source of truth for *which* comments get scanned
+        — callers (preview, analyze) must go through this rather than each
+        picking their own comment sample, or the same issue can silently
+        yield different MR results depending on which entry point ran.
+
+        Scans the most recent MR_DETECTION_MAX_COMMENTS comments (recency,
+        not a scattered first/middle/last sample) — MRs are typically
+        created and linked as a thread progresses, so recent comments are
+        where a reference is most likely to land. For long threads this
+        still can't guarantee finding a link buried early in an old thread,
+        but it is deterministic and identical across every caller.
+        """
+        issue_html = metadata.get("problem_description_html", "")
+        comment_ids = metadata.get("comment_ids", [])
+        recent_ids = comment_ids[-MR_DETECTION_MAX_COMMENTS:]
+
+        comment_bodies = []
+        if recent_ids:
+            comments = comment_client.get_multiple_comments(recent_ids)
+            comment_bodies = [c["body_html"] for c in comments if c.get("body_html")]
+
+        raw = self.detect_mr_urls_from_issue_body(issue_html)
+        raw += self.detect_mr_urls_from_comments(comment_bodies)
+
+        seen = set()
+        unique = []
+        for mr in raw:
+            key = (mr["project"], mr["mr_iid"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(mr)
+        return unique
 
     # ------------------------------------------------------------------
     # Metadata

@@ -46,6 +46,15 @@ class TestDetectCoreFromContribVersion:
     def test_none_defaults_to_latest(self):
         assert VersionResolver._detect_core_from_contrib_version(None) == VersionResolver.CONTRIB_LEGACY_CORE_DEFAULT
 
+    def test_legacy_8x_prefix_defaults_to_latest_core(self):
+        # Regression coverage: "8.x-3.x-dev" is the pre-D9 legacy contrib
+        # branch naming scheme, not a literal "requires Drupal 8" signal.
+        # This used to resolve to "8", producing checkout_ref "8.x" — a
+        # branch that doesn't exist in Drupal core — which broke cloning
+        # for every "8.x-*" contrib module (e.g. encrypt's "8.x-3.x-dev").
+        result = VersionResolver._detect_core_from_contrib_version("8.x-3.x-dev")
+        assert result == VersionResolver.CONTRIB_LEGACY_CORE_DEFAULT
+
 
 class TestResolveCore:
     def test_main_gives_drupal11(self):
@@ -84,3 +93,12 @@ class TestResolveContrib:
         r = VersionResolver.resolve(meta)
         assert "contrib_branch" in r
         assert r["contrib_branch"] == "6.x"
+
+    def test_contrib_legacy_8x_version_gives_valid_core_branch(self):
+        # End-to-end regression for the encrypt module provisioning failure:
+        # checkout_ref must be a real Drupal core branch, and contrib_branch
+        # must stay the module's own "8.x-3.x" branch for its own clone.
+        meta = {"project_name": "encrypt", "version": "8.x-3.x-dev"}
+        r = VersionResolver.resolve(meta)
+        assert r["checkout_ref"] == f"{VersionResolver.CONTRIB_LEGACY_CORE_DEFAULT}.x"
+        assert r["contrib_branch"] == "8.x-3.x"

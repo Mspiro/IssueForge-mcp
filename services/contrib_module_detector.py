@@ -55,9 +55,20 @@ class ContribModuleDetector:
         "rules", "flag", "votingapi", "rate", "node_access_rebuild",
     ]
 
+    # Module names that double as common English/Drupal vocabulary. A bare
+    # word-boundary match on these produces false positives — e.g. "entity"
+    # appears in nearly every Drupal issue as generic architecture
+    # terminology ("an entity+bundle"), and "flag" shows up in ordinary
+    # phrases like "a feature flag module" that have nothing to do with the
+    # drupal.org/project/flag bookmarking module. These require the
+    # stronger "the <name> module" phrasing before being trusted; genuine
+    # mentions (explicit links, composer requires) are still caught by
+    # steps 1-2 above regardless.
+    AMBIGUOUS_KEYWORDS = {"entity", "flag", "rules", "token", "ds"}
+
     # Drupal core modules — never treat these as contrib.
     CORE_MODULES = {
-        "node", "user", "block", "views", "field", "file", "image", "menu_link_content",
+        "drupal", "node", "user", "block", "views", "field", "file", "image", "menu_link_content",
         "taxonomy", "comment", "contact", "forum", "aggregator", "ban", "book",
         "color", "config", "content_translation", "contextual", "datetime",
         "datetime_range", "dblog", "editor", "entity_reference", "filter",
@@ -95,17 +106,25 @@ class ContribModuleDetector:
             if name not in blocked:
                 found.add(name)
 
-        # 2. Composer require patterns
+        # 2. Composer require patterns. The lookbehind keeps this from
+        #    matching "drupal/NAME" inside a URL path like
+        #    drupal.org/project/drupal/issues/12345, where "drupal/issues"
+        #    would otherwise be misread as a composer package name.
         for match in re.finditer(
-            r"(?:composer\s+require\s+)?drupal/([a-z0-9_]+)", combined_text
+            r"(?<!/)(?:composer\s+require\s+)?drupal/([a-z0-9_]+)", combined_text
         ):
             name = match.group(1)
             if name not in blocked:
                 found.add(name)
 
-        # 3. Known-module keyword matching (word-boundary aware)
+        # 3. Known-module keyword matching (word-boundary aware).
+        #    Ambiguous names need "the <name> module" phrasing; the rest
+        #    match on a bare word-boundary as before.
         for module in ContribModuleDetector.KNOWN_MODULES:
-            if re.search(r"\b" + re.escape(module) + r"\b", combined_text):
+            if module in ContribModuleDetector.AMBIGUOUS_KEYWORDS:
+                if re.search(r"\bthe\s+" + re.escape(module) + r"\s+module\b", combined_text):
+                    found.add(module)
+            elif re.search(r"\b" + re.escape(module) + r"\b", combined_text):
                 found.add(module)
 
         return sorted(found)

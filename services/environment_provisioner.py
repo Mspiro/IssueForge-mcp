@@ -60,6 +60,42 @@ class EnvironmentProvisioner:
             return False
 
     @staticmethod
+    def _apply_profile_recipe(env_path: str, install_profile: str) -> bool:
+        """
+        Apply core/recipes/<install_profile> if it exists in this checkout.
+
+        Uses core/scripts/dr (current) or core/scripts/drupal (deprecated
+        fallback for slightly older checkouts) to invoke `recipe <path>`.
+        Non-fatal on failure: provisioning continues, but a warning is
+        logged so the gap is visible rather than silently swallowed.
+        """
+        recipe_dir = os.path.join(env_path, "core", "recipes", install_profile)
+        if not os.path.isdir(recipe_dir):
+            return True
+
+        dr_script = os.path.join(env_path, "core", "scripts", "dr")
+        drupal_script = os.path.join(env_path, "core", "scripts", "drupal")
+        if os.path.exists(dr_script):
+            script = "core/scripts/dr"
+        elif os.path.exists(drupal_script):
+            script = "core/scripts/drupal"
+        else:
+            return True
+
+        print(f"Applying '{install_profile}' recipe (default content types, etc.)...")
+        recipe_ok = EnvironmentProvisioner.run_command(
+            ["ddev", "exec", "php", script, "recipe", f"core/recipes/{install_profile}"],
+            cwd=env_path, timeout=180,
+        )
+        if not recipe_ok:
+            logger.warning(
+                "Recipe application for '%s' failed — the site may be missing "
+                "default content types (e.g. 'page'). Continuing provisioning.",
+                install_profile,
+            )
+        return recipe_ok
+
+    @staticmethod
     def _is_env_running(env_name: str) -> bool:
         """Return True if DDEV reports the named project as running."""
         try:
@@ -107,6 +143,31 @@ class EnvironmentProvisioner:
                 shutil.rmtree(env_path)
             except Exception as e:
                 logger.warning("Could not remove %s: %s", env_path, e)
+
+    @staticmethod
+    def _detect_own_contrib_dependencies(module_path: str) -> list:
+        """
+        Read a git-cloned contrib project's own composer.json (if present)
+        and return the machine names of any "drupal/*" packages it requires.
+        """
+        composer_json_path = os.path.join(module_path, "composer.json")
+        if not os.path.isfile(composer_json_path):
+            return []
+        try:
+            import json
+            with open(composer_json_path) as f:
+                data = json.load(f)
+            requires = data.get("require", {})
+            return [
+                package.split("/", 1)[1]
+                for package in requires
+                if package.startswith("drupal/")
+            ]
+        except Exception as e:
+            logger.warning(
+                "Could not parse composer.json at %s: %s", composer_json_path, e
+            )
+            return []
 
     @staticmethod
     def _filter_existing_modules(modules: list) -> list:
@@ -215,17 +276,28 @@ class EnvironmentProvisioner:
         is_contrib = env_plan.get("is_contrib", False)
         project_name = env_plan.get("project_name", "drupal")
         contrib_branch = env_plan.get("contrib_branch")
+        own_dependencies = []
         if is_contrib and project_name != "drupal":
             contrib_dir = os.path.join(env_path, "modules", "contrib")
             os.makedirs(contrib_dir, exist_ok=True)
             contrib_repo = f"https://git.drupalcode.org/project/{project_name}.git"
+            module_path = os.path.join(contrib_dir, project_name)
             print(f"Cloning {project_name} ({contrib_branch}) into {contrib_dir}/{project_name}...")
             if not EnvironmentProvisioner.run_command(
                 ["git", "clone", "--branch", contrib_branch, "--depth", "1",
-                 contrib_repo, os.path.join(contrib_dir, project_name)],
+                 contrib_repo, module_path],
                 timeout=120,
             ):
                 raise RuntimeError(f"Failed to clone contrib module {project_name}.")
+            # The issue's own project is git-cloned directly (to preserve its
+            # dev branch for patch application) rather than composer-required,
+            # so Composer never processes its composer.json — any real
+            # dependency it declares (e.g. Encrypt requiring Key) would
+            # otherwise be silently missing, and `drush en` fails with
+            # "is missing its dependency module ...".
+            own_dependencies = EnvironmentProvisioner._detect_own_contrib_dependencies(
+                module_path
+            )
 
         # 3. Configure DDEV
         project_type = env_plan.get("project_type", "drupal11")
@@ -278,8 +350,23 @@ class EnvironmentProvisioner:
         ):
             raise RuntimeError("Failed to install Drupal site.")
 
+        # 7b. Apply the install profile's recipe, if this checkout has one.
+        #
+        # Since Drupal 10.3+, profiles like "standard" no longer ship their
+        # default bundles (e.g. the "page" content type) as profile
+        # config/install — that setup moved into a recipe under
+        # core/recipes/<profile>, applied as a separate step. `drush si`
+        # alone produces a site with zero content types on these versions,
+        # which silently breaks reproduction of anything content-type
+        # related. Older checkouts (pre-recipes, or Drupal 7) simply won't
+        # have this directory, so this is a no-op there.
+        if not is_drupal7:
+            EnvironmentProvisioner._apply_profile_recipe(env_path, install_profile)
+
         # 8. Download and enable contrib modules
         contrib_modules = env_plan.get("contrib_modules", [])
+        if own_dependencies:
+            contrib_modules = list(dict.fromkeys(contrib_modules + own_dependencies))
         if is_contrib and project_name in contrib_modules:
             contrib_modules = [m for m in contrib_modules if m != project_name]
         if contrib_modules:

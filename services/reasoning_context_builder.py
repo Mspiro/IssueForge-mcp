@@ -69,6 +69,8 @@ class ReasoningContextBuilder:
             "comment_signals":
                 comment_signal_result.get("comment_signals", []),
 
-            # FIXED HERE
+            "comment_signal_details":
+                comment_signal_result.get("comment_signal_details", []),
+
             "patch_status": patch_status,
         }

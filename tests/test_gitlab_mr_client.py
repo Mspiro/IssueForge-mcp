@@ -54,6 +54,68 @@ class TestDetectMrUrlsFromComments:
         assert result[0]["mr_iid"] == "777"
 
 
+class TestDetectMrsForIssue:
+    """
+    Regression coverage for a real inconsistency: preview_issue.py found
+    MR !13200 for issue #3115759 (77 comments) while analyze_issue.py did
+    not, because each fetched its own small, differently-windowed comment
+    sample. detect_mrs_for_issue() is the single shared path both now use.
+    """
+
+    def setup_method(self):
+        self.client = GitlabMrClient(token="")
+
+    def _comment_client(self, id_to_body):
+        mock = MagicMock()
+        mock.get_multiple_comments.side_effect = lambda ids: [
+            {"comment_id": i, "body_html": id_to_body[i]} for i in ids if i in id_to_body
+        ]
+        return mock
+
+    def test_finds_mr_buried_deep_in_a_long_thread(self):
+        # Simulate a long thread where the MR link is mentioned partway
+        # through — not in the first/middle/last few comments a naive
+        # sample would grab, but still within the recent window.
+        comment_ids = list(range(1, 78))  # 77 comments, like the real issue
+        bodies = {i: f"comment {i}" for i in comment_ids}
+        bodies[70] = "Opened https://git.drupalcode.org/project/drupal/-/merge_requests/13200"
+        metadata = {"problem_description_html": "", "comment_ids": comment_ids}
+
+        result = self.client.detect_mrs_for_issue(metadata, self._comment_client(bodies))
+        assert len(result) == 1
+        assert result[0]["mr_iid"] == "13200"
+
+    def test_no_comments_returns_empty(self):
+        metadata = {"problem_description_html": "", "comment_ids": []}
+        result = self.client.detect_mrs_for_issue(metadata, self._comment_client({}))
+        assert result == []
+
+    def test_issue_body_alone_is_still_scanned(self):
+        metadata = {
+            "problem_description_html": (
+                "See https://git.drupalcode.org/project/drupal/-/merge_requests/42"
+            ),
+            "comment_ids": [],
+        }
+        result = self.client.detect_mrs_for_issue(metadata, self._comment_client({}))
+        assert result[0]["mr_iid"] == "42"
+
+    def test_dedupes_across_body_and_comments(self):
+        comment_ids = [1, 2]
+        bodies = {
+            1: "https://git.drupalcode.org/project/drupal/-/merge_requests/5",
+            2: "no mr here",
+        }
+        metadata = {
+            "problem_description_html": (
+                "https://git.drupalcode.org/project/drupal/-/merge_requests/5"
+            ),
+            "comment_ids": comment_ids,
+        }
+        result = self.client.detect_mrs_for_issue(metadata, self._comment_client(bodies))
+        assert len(result) == 1
+
+
 class TestGetMrDetails:
     def test_returns_none_without_token(self):
         client = GitlabMrClient(token="")

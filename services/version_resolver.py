@@ -81,10 +81,16 @@ class VersionResolver:
 
         # 2. Semver-style contrib version with core prefix like "10.x-3.x-dev"
         #    Some projects use "10.x-N.x" to signal D10 compatibility.
+        #    "8.x-N.x" is excluded: it's the pre-D9 legacy branch naming
+        #    scheme (predates per-core-version prefixes) and does not mean
+        #    "requires Drupal 8 core" — treating it as a literal match used
+        #    to resolve checkout_ref to "8.x", a branch that doesn't exist
+        #    in Drupal core (core's last 8-series branch was "8.9.x"), which
+        #    made cloning fail outright for any "8.x-*" contrib module.
         semver_prefix = re.match(r"^(\d+)\.x-", v)
         if semver_prefix:
             prefix_major = semver_prefix.group(1)
-            if prefix_major in VersionResolver.VERSION_MAP:
+            if prefix_major != "8" and prefix_major in VersionResolver.VERSION_MAP:
                 return prefix_major
 
         # 3. Plain semver "2.x", "3.0.0" — no core signal, use latest stable.

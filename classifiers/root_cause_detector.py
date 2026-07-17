@@ -59,7 +59,21 @@ class RootCauseDetector:
 
         combined = list(set(function_signals + subsystem_signals))
 
+        # A modified function name matching FUNCTION_PATTERNS is real evidence
+        # the changed code path resembles a known bug shape. A subsystem hint
+        # on its own just means some file lives under a module directory whose
+        # name happens to match a keyword (e.g. any file under
+        # core/modules/views/, including a renamed CSS asset, matches
+        # "Views") — that is not evidence of *why* the issue exists, so it
+        # should not be reported with the same confidence as a function match.
+        if function_signals:
+            confidence = "medium"
+        elif subsystem_signals:
+            confidence = "low"
+        else:
+            confidence = "low"
+
         return {
             "root_cause_signals": combined,
-            "confidence": "medium" if combined else "low"
+            "confidence": confidence
         }

@@ -66,13 +66,17 @@ class IssueForgeServer:
         root_signals = root_cause_result["root_cause_signals"]
 
         # Step 6: heuristic fix strategies
+        # generate() expects (root_cause_signals, modified_functions) — passing
+        # (detected_subsystems, root_signals) here meant neither list could ever
+        # match STRATEGY_RULES (keyed by root-cause phrases) or
+        # FUNCTION_STRATEGIES (keyed by function names), so fix_strategies was
+        # unconditionally empty for every issue.
         strategy_result = FixStrategyGenerator.generate(
-            detected_subsystems, root_signals
+            root_signals, modified_functions
         )
         final_subsystems = detected_subsystems
         final_root_signals = root_signals
         final_fix_strategies = strategy_result.get("fix_strategies", [])
-        final_risk_level = strategy_result.get("risk_level", "medium")
 
         # Step 7: extract comment intelligence
         comment_ids = metadata.get("comment_ids", [])
@@ -90,18 +94,11 @@ class IssueForgeServer:
 
         comment_signal_result = CommentSignalDetector.detect(comment_bodies)
 
-        # Step 7b: detect MRs from comments + issue body
-        issue_body_html = metadata.get("problem_description_html", "")
-        detected_mrs = self.mr_client.detect_mr_urls_from_issue_body(issue_body_html)
-        detected_mrs += self.mr_client.detect_mr_urls_from_comments(comment_bodies)
-        # Deduplicate
-        seen_mr_keys = set()
-        unique_mrs = []
-        for mr in detected_mrs:
-            key = (mr["project"], mr["mr_iid"])
-            if key not in seen_mr_keys:
-                seen_mr_keys.add(key)
-                unique_mrs.append(mr)
+        # Step 7b: detect MRs — goes through the shared detector so preview
+        # and analyze always agree on the same issue (see GitlabMrClient.
+        # detect_mrs_for_issue for why this can't reuse the small sample
+        # above: it scans its own, larger, recency-based comment window).
+        unique_mrs = self.mr_client.detect_mrs_for_issue(metadata, self.comment_client)
         detected_mrs = unique_mrs
 
         # Step 8: classify patch lifecycle status
@@ -170,8 +167,18 @@ class IssueForgeServer:
         context["reproduction_script"] = reproduction_script
         context["detected_mrs"] = detected_mrs
         context["llm_analysis"] = {
-            "root_cause": root_cause_result.get("root_cause", ""),
-            "risk_level": final_risk_level,
+            # RootCauseDetector.detect() returns "root_cause_signals" (a
+            # list), never a "root_cause" key — reading .get("root_cause")
+            # here always silently returned "" regardless of what was
+            # actually detected. Join the real signals into a readable
+            # summary instead.
+            "root_cause": "; ".join(final_root_signals),
+            # FixStrategyGenerator.generate() never returns a "risk_level" key
+            # (only "fix_strategies" and "confidence"); the real risk_level is
+            # computed by PatchPlanGenerator.build_plan() above, so read it
+            # from there instead of an always-missing key that silently fell
+            # back to a hardcoded "medium" regardless of the actual patch.
+            "risk_level": patch_plan.get("risk_level", "medium"),
             "confidence": root_cause_result.get("confidence", "medium"),
         }
 

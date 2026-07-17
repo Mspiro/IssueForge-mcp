@@ -4,11 +4,15 @@ class PatchStatusClassifier:
     Returns STRING only (never dict).
     """
 
+    # Keys must match the exact label strings CommentSignalDetector
+    # produces (see KEYWORD_SIGNALS values there) — "Needs review" and
+    # "Issue fixed" never matched anything real, so needs_review/fixed
+    # were unreachable regardless of what comments said.
     SIGNAL_MAP = {
         "Patch requires revision": "needs_work",
-        "Needs review": "needs_review",
+        "Patch awaiting review": "needs_review",
         "Ready for community review": "rtbc",
-        "Issue fixed": "fixed",
+        "Likely committed upstream": "fixed",
     }
 
     PRIORITY = [

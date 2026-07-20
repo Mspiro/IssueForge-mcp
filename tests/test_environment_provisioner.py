@@ -236,3 +236,54 @@ class TestDdevRouterIsRunning:
     def test_returns_false_on_docker_command_failure(self):
         with patch("subprocess.run", side_effect=Exception("docker not found")):
             assert EnvironmentProvisioner._ddev_router_is_running() is False
+
+
+class TestApplyProfileRecipe:
+    """
+    Regression coverage for a real bug found testing issue #3353839: a
+    "standard" profile install came up with zero content types, because
+    core/recipes/standard's own recipe.yml doesn't depend on
+    article_content_type/page_content_type — applying the profile's own
+    recipe alone isn't enough.
+    """
+
+    def test_no_recipe_dir_is_a_noop(self, tmp_path):
+        (tmp_path / "core" / "scripts").mkdir(parents=True)
+        (tmp_path / "core" / "scripts" / "dr").touch()
+        with patch.object(EnvironmentProvisioner, "run_command") as mock_run:
+            result = EnvironmentProvisioner._apply_profile_recipe(str(tmp_path), "nonexistent_recipe")
+            assert result is True
+            mock_run.assert_not_called()
+
+    def test_no_dr_or_drupal_script_is_a_noop(self, tmp_path):
+        (tmp_path / "core" / "recipes" / "article_content_type").mkdir(parents=True)
+        with patch.object(EnvironmentProvisioner, "run_command") as mock_run:
+            result = EnvironmentProvisioner._apply_profile_recipe(str(tmp_path), "article_content_type")
+            assert result is True
+            mock_run.assert_not_called()
+
+    def test_applies_recipe_via_dr_script(self, tmp_path):
+        (tmp_path / "core" / "recipes" / "article_content_type").mkdir(parents=True)
+        (tmp_path / "core" / "scripts").mkdir(parents=True)
+        (tmp_path / "core" / "scripts" / "dr").touch()
+        with patch.object(EnvironmentProvisioner, "run_command", return_value=True) as mock_run:
+            result = EnvironmentProvisioner._apply_profile_recipe(str(tmp_path), "article_content_type")
+            assert result is True
+            called_args = mock_run.call_args[0][0]
+            assert called_args == [
+                "ddev", "exec", "php", "core/scripts/dr", "recipe",
+                "core/recipes/article_content_type",
+            ]
+
+    def test_failure_is_non_fatal(self, tmp_path):
+        (tmp_path / "core" / "recipes" / "article_content_type").mkdir(parents=True)
+        (tmp_path / "core" / "scripts").mkdir(parents=True)
+        (tmp_path / "core" / "scripts" / "dr").touch()
+        with patch.object(EnvironmentProvisioner, "run_command", return_value=False):
+            result = EnvironmentProvisioner._apply_profile_recipe(str(tmp_path), "article_content_type")
+            assert result is False
+
+    def test_standard_profile_extra_recipes_constant(self):
+        assert EnvironmentProvisioner._STANDARD_PROFILE_EXTRA_RECIPES == (
+            "article_content_type", "page_content_type",
+        )

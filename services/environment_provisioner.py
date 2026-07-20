@@ -62,17 +62,28 @@ class EnvironmentProvisioner:
             logger.error("Error running command %s: %s", " ".join(args), e)
             return False
 
+    # Content-type recipes that "standard" installs have shipped by default
+    # since long before the recipes system existed — but core/recipes/standard's
+    # own recipe.yml does NOT list these as dependencies (verified directly:
+    # its "recipes:" key covers text formats, roles, theme config, etc., not
+    # content types), so they can't be discovered from the profile's own
+    # dependency graph. A "standard" install with zero content types was
+    # found live while testing issue #3353839 — `drush si standard` plus
+    # applying the standard recipe alone produced a site with no bundles
+    # at all, silently breaking reproduction of anything content-type related.
+    _STANDARD_PROFILE_EXTRA_RECIPES = ("article_content_type", "page_content_type")
+
     @staticmethod
-    def _apply_profile_recipe(env_path: str, install_profile: str) -> bool:
+    def _apply_profile_recipe(env_path: str, recipe_name: str) -> bool:
         """
-        Apply core/recipes/<install_profile> if it exists in this checkout.
+        Apply core/recipes/<recipe_name> if it exists in this checkout.
 
         Uses core/scripts/dr (current) or core/scripts/drupal (deprecated
         fallback for slightly older checkouts) to invoke `recipe <path>`.
         Non-fatal on failure: provisioning continues, but a warning is
         logged so the gap is visible rather than silently swallowed.
         """
-        recipe_dir = os.path.join(env_path, "core", "recipes", install_profile)
+        recipe_dir = os.path.join(env_path, "core", "recipes", recipe_name)
         if not os.path.isdir(recipe_dir):
             return True
 
@@ -85,16 +96,16 @@ class EnvironmentProvisioner:
         else:
             return True
 
-        print(f"Applying '{install_profile}' recipe (default content types, etc.)...")
+        print(f"Applying '{recipe_name}' recipe...")
         recipe_ok = EnvironmentProvisioner.run_command(
-            ["ddev", "exec", "php", script, "recipe", f"core/recipes/{install_profile}"],
+            ["ddev", "exec", "php", script, "recipe", f"core/recipes/{recipe_name}"],
             cwd=env_path, timeout=180,
         )
         if not recipe_ok:
             logger.warning(
                 "Recipe application for '%s' failed — the site may be missing "
                 "default content types (e.g. 'page'). Continuing provisioning.",
-                install_profile,
+                recipe_name,
             )
         return recipe_ok
 
@@ -582,16 +593,25 @@ class EnvironmentProvisioner:
 
         # 7b. Apply the install profile's recipe, if this checkout has one.
         #
-        # Since Drupal 10.3+, profiles like "standard" no longer ship their
-        # default bundles (e.g. the "page" content type) as profile
-        # config/install — that setup moved into a recipe under
-        # core/recipes/<profile>, applied as a separate step. `drush si`
-        # alone produces a site with zero content types on these versions,
-        # which silently breaks reproduction of anything content-type
-        # related. Older checkouts (pre-recipes, or Drupal 7) simply won't
-        # have this directory, so this is a no-op there.
+        # `drush si` alone produces a site with zero content types on
+        # Drupal 10.3+/11.x — that setup moved into recipes applied as a
+        # separate step. Older checkouts (pre-recipes, or Drupal 7) simply
+        # won't have this directory, so this is a no-op there.
         if not is_drupal7:
             EnvironmentProvisioner._apply_profile_recipe(env_path, install_profile)
+
+            # core/recipes/standard's own recipe.yml does NOT depend on
+            # article_content_type/page_content_type (verified directly —
+            # its "recipes:" key covers text formats, roles, theme config,
+            # not content types), so applying the profile's own recipe
+            # above still leaves a site with zero content types. Found
+            # live while testing issue #3353839: reproduction failed with
+            # "Missing bundle entity, entity type node_type, entity id
+            # article" even after both `drush si standard` and the standard
+            # recipe succeeded.
+            if install_profile == "standard":
+                for extra_recipe in EnvironmentProvisioner._STANDARD_PROFILE_EXTRA_RECIPES:
+                    EnvironmentProvisioner._apply_profile_recipe(env_path, extra_recipe)
 
         # 8. Download and enable contrib modules
         EnvironmentProvisioner._stage(7, "Downloading and enabling modules/themes")

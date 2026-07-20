@@ -250,6 +250,18 @@ This is silent bookkeeping — don't ask the user for permission, just run it
 and move on. It does not hit the network (no refresh here); live status is
 refreshed only when the user asks or at the next `/issueforge` startup line.
 
+Then stop the environment's DDEV containers (they'd otherwise keep running
+indefinitely in the background):
+```
+! ddev stop env-<ID>
+```
+Unlike the dashboard write above, mention this one in one line — it's a
+real state change (containers stop), not invisible bookkeeping, even
+though it's fully reversible (the database persists in a Docker volume;
+`ddev start` in the same environment folder brings everything back
+exactly as it was). Skip this only if the user says they want to keep
+poking at the site.
+
 ---
 
 ## Credentials

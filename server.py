@@ -101,7 +101,9 @@ class IssueForgeServer:
                 c["body_html"] for c in comments if c.get("body_html")
             ]
 
-        comment_signal_result = CommentSignalDetector.detect(comment_bodies)
+        comment_signal_result = CommentSignalDetector.detect(
+            comment_bodies, current_issue_id=metadata.get("issue_id")
+        )
 
         # Step 7b: detect MRs — goes through the shared detector so preview
         # and analyze always agree on the same issue (see GitlabMrClient.

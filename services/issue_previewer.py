@@ -10,6 +10,7 @@ import html
 import re
 from datetime import datetime
 
+from services.credential_manager import get_credentials
 from services.drupal_api_client import DrupalAPIClient
 from services.drupal_comment_client import DrupalCommentClient
 from services.drupal_patch_client import DrupalPatchClient
@@ -24,6 +25,7 @@ class IssuePreviewer:
         comment_client = DrupalCommentClient()
         patch_client = DrupalPatchClient()
         mr_client = GitlabMrClient(token=gitlab_token)
+        drupal_username = get_credentials().get("drupal_username", "")
 
         # --- Metadata ---
         meta = api.get_issue_metadata(issue_url)
@@ -89,7 +91,13 @@ class IssuePreviewer:
                     ts = c.get("created")
                     date = (datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
                             if ts else "")
-                    recent_comments.append({"date": date, "text": text[:600]})
+                    author = c.get("author_name", "")
+                    recent_comments.append({
+                        "date": date,
+                        "author": author,
+                        "is_self": bool(drupal_username) and author == drupal_username,
+                        "text": text[:600],
+                    })
 
         # --- MR detection ---
         # Goes through the shared detector (same one analyze_issue uses) so
@@ -250,6 +258,9 @@ class IssuePreviewer:
             lines.append("RECENT_COMMENTS:")
             for c in recent:
                 date = c.get("date", "")
-                lines.append(f"[{date}] {c['text']}")
+                author = c.get("author", "")
+                who = f"@{author}" if author else "(unknown author)"
+                tag = " (you)" if c.get("is_self") else ""
+                lines.append(f"[{date}] {who}{tag}: {c['text']}")
 
         return "\n".join(lines)

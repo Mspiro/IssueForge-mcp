@@ -75,10 +75,14 @@ class DrupalCommentClient:
 
         try:
             comment_json = self.safe_request(url)
+            author = comment_json.get("author") or {}
 
             return {
                 "comment_id": comment_json.get("cid"),
-                "author_id": comment_json.get("uid"),
+                "author_id": author.get("id", ""),
+                # The comment resource's top-level "name" is the author's
+                # username directly — no separate user-lookup call needed.
+                "author_name": comment_json.get("name", ""),
                 "created": comment_json.get("created"),
                 "body_html": self.extract_body(comment_json),
             }

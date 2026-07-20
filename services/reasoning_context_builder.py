@@ -72,5 +72,8 @@ class ReasoningContextBuilder:
             "comment_signal_details":
                 comment_signal_result.get("comment_signal_details", []),
 
+            "related_issues":
+                comment_signal_result.get("related_issues", []),
+
             "patch_status": patch_status,
         }

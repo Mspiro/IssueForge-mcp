@@ -120,6 +120,27 @@ class PatchApplier:
             }
 
     @staticmethod
+    def _is_already_applied(apply_cwd: str, patch_path: str) -> bool:
+        """
+        A patch that's already applied always fails a forward `git apply
+        --check` (the "before" context no longer matches) — indistinguishable
+        from a genuine conflict by that check alone. `git apply --check
+        --reverse` succeeding means the tree already matches the patch's
+        "after" state, which only happens when it's already applied; a
+        genuinely conflicting patch fails both directions. Verified: forward
+        check fails identically in both cases, reverse check only succeeds
+        for the already-applied case.
+        """
+        for args in ([], ["--ignore-whitespace"]):
+            check = subprocess.run(
+                ["git", "apply", "--check", "--reverse"] + args + [patch_path],
+                cwd=apply_cwd, capture_output=True, text=True,
+            )
+            if check.returncode == 0:
+                return True
+        return False
+
+    @staticmethod
     def apply_patch_file(env_path: str, patch_path: str) -> Dict:
         """
         Apply a patch from a local file path (not a remote patch_id).
@@ -150,6 +171,13 @@ class PatchApplier:
                 break
 
         if winning_args is None:
+            if PatchApplier._is_already_applied(apply_cwd, patch_path):
+                return {
+                    "success": True,
+                    "already_applied": True,
+                    "message": f"{patch_filename} is already applied — working tree already matches.",
+                    "target_root": apply_cwd,
+                }
             return {
                 "success": False,
                 "message": "Patch cannot be applied cleanly with any strategy.",

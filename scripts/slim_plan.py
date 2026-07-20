@@ -31,6 +31,10 @@ def main():
         "patch_status":             plan.get("patch_status", ""),
         "comment_signals":          plan.get("comment_signals", []),
         "comment_signal_details":   plan.get("comment_signal_details", []),
+        # Flagged only when a comment references another issue number near
+        # redirect/duplicate language (e.g. "favor closing this in favor of
+        # #NNNNNNN") — read-only signal, never auto-fetched. See Step 2.
+        "related_issues":          plan.get("related_issues", []),
         "modified_files":           plan.get("modified_files", []),
         "reproduction_steps":       plan.get("reproduction_steps", []),
         "detected_mrs":             plan.get("detected_mrs", []),

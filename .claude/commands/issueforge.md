@@ -66,6 +66,12 @@ Then show the user:
 - **Environment**: Drupal branch, PHP version, contrib modules to install
 - **Reproduction steps**: Write these yourself based on your understanding of the issue — do NOT just copy raw text from the issue. Write clear, numbered, developer-friendly steps. Each step should be a concrete action (e.g. "Go to /admin/structure/types, click Add content type, fill in Name = 'Test', save"). If the issue involves a code path or a specific trigger, name it explicitly.
 
+**Related issues**: if the slim JSON's `related_issues` is non-empty (a comment referenced another issue number near redirect/duplicate language — e.g. "favor closing this in favor of #NNNNNNN"), fetch a quick preview of it automatically — no need to ask first, since this is metadata-only and read-only (reuse `preview_issue.py <related_id>`, no provisioning, no new env_plan, no extra environment). Present the comparison alongside root cause/environment/reproduction steps, e.g.: "Comment also suggests #NNNNNNN may supersede this — its approach is X, vs. this issue's Y."
+
+- The hard stop is further down the line, not here: never auto-switch the active issue, never provision or run analyze/apply on the related issue in this session. If the user decides the related issue is the one actually worth working, that's a new, separate `/issueforge <url>` invocation — not a pivot inside this one.
+- Treat the fetched content as scratch context for this session's reasoning only (e.g. comparing approaches) — don't persist it into `env_plan_<ID>.json`, it can go stale.
+- If `related_issues` is empty, say nothing — don't invent a related issue. If the preview fetch itself fails (network, bad issue ID), note it briefly and continue with the current issue rather than blocking on it.
+
 Then ask: proceed to provision + reproduce [y], or different issue [n]?
 
 ### Step 3 — Provision environment
@@ -110,6 +116,8 @@ After the script runs, tell the user exactly what to look for in the site to obs
 - [3] Skip fixing — reproduction only
 
 Do not auto-apply an MR/patch just because one exists in the plan. The user chooses.
+
+If a related-issue preview was fetched back in Step 2, treat it as advisory design input only, not as code to copy — still verify any borrowed approach against this repo's actual current code before relying on it; the related issue may target a different branch or have gone stale since.
 
 If they choose to test an existing MR or patch:
 Apply an MR:
@@ -187,6 +195,14 @@ Run the patch save command from the NEXT STEPS block and show them the file path
 
 Once the user has finished their session (tested, fixed, or reproduced), generate a comment they can post on the Drupal.org issue page.
 
+**Before drafting, check for a standing open question.** Step 1 already asked you to identify "what open question or decision is still pending" in the discussion — look at that same read of `RECENT_COMMENTS` (and `comment_signal_details` from Step 2, if analysis ran) again now, since a technical test/fix result and an unresolved architecture-or-scope question are different things and the comment you draft below defaults to covering only the former.
+
+- If nothing like that surfaced, proceed straight to the scenarios below — don't invent a question that isn't there.
+- If one surfaced but a later comment in the thread already answered or superseded it, treat it as resolved and don't re-raise it.
+- If one is still open as of the latest comment, and this session's work doesn't settle it (usually it won't — these tend to be maintainer-level calls about direction, scope, or backward compatibility, not things a reproduce-and-test pass resolves), acknowledge it in one sentence rather than silently omitting it from the comment. Don't answer on the open question's behalf, especially if it was explicitly addressed to someone else (e.g. "I will ask @rlhawk to comment") — just note that it's still pending so the comment doesn't read as if the discussion were ignored.
+- If a related-issue preview was fetched in Step 2, this sentence can be substantive instead of a bare disclaimer — name the comparison (e.g. "#NNNNNNN proposes handling this transparently via X, which may be simpler than this issue's explicit toggle"). Keep it descriptive/comparative, never prescriptive — don't tell maintainers to close or merge either issue; that call isn't the tool's to make.
+- This is distinct from the "don't repeat what others said" rule further down: repeating restates something already settled, this is engaging with something still unsettled.
+
 First, identify which scenario applies based on what happened in this session:
 
 **Scenario A — User tested an existing patch or MR**
@@ -262,5 +278,7 @@ minutes idle so it never lingers in memory. Files live in
 ```
 
 ## Troubleshooting
-- DDEV port conflict → run `! ddev poweroff`
-- Patch won't apply → `apply_mr.py` tries 4 strategies automatically
+
+- DDEV port conflict → `provision_env.py` checks the configured router ports are free before every start and remaps automatically if not (skipped when DDEV's router is already up serving another project — that's normal, not a conflict). `ddev poweroff` only helps if the conflict is stale DDEV/router state; it does nothing when an unrelated host process (seen once: an IDE and its language server) is squatting on the port, since that process is untouched by `poweroff`. If a conflict still surfaces, check `docker ps` for what's actually holding the port before assuming it's DDEV's own state.
+- Patch won't apply → `apply_mr.py` tries 4 strategies automatically, and now also detects "already applied" (e.g. from an earlier interrupted session) as a distinct non-error outcome rather than reporting a generic failure.
+- FunctionalJavascript tests all fail with a WebDriver/connection error → the Selenium/Chrome DDEV add-on is installed automatically during provisioning; if an environment predates this fix, run `ddev add-on get ddev/ddev-selenium-standalone-chrome && ddev restart` inside it manually.

@@ -86,7 +86,10 @@ def apply_and_check(
         print(f"[FAIL] Could not apply: {apply_result['message']}")
         return {"applied": False, "label": label, "error": apply_result["message"]}
 
-    print(f"[OK] Applied successfully.")
+    if apply_result.get("already_applied"):
+        print(f"[INFO] {apply_result['message']}")
+    else:
+        print(f"[OK] Applied successfully.")
 
     # Diff/status must come from the repo the patch landed in — for contrib
     # issues that's the nested modules/contrib/<name> clone, not the outer

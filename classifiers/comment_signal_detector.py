@@ -32,8 +32,41 @@ class CommentSignalDetector:
          "Regression or failing test detected"),
     ]
 
+    # Drupal.org issue node IDs are 6-7 digit numbers referenced as "#NNNNNNN".
+    # A bare reference isn't enough signal on its own — "see #123456 for
+    # background" is common and unrelated — so this only fires when a
+    # redirect/duplicate phrase appears within REF_WINDOW characters of the
+    # reference, keeping precision high on the same or an adjacent sentence.
+    ISSUE_REF_PATTERN = re.compile(r"#(\d{6,7})\b")
+    REDIRECT_KEYWORDS = re.compile(
+        r"\b(duplicate|supersed\w*|favor\w* closing|clos\w* (?:this|it) in favor|"
+        r"close (?:this|it) (?:issue|one)|cleaner solution|same as|redirect\w*)\b",
+        re.I,
+    )
+    REF_WINDOW = 200
+
     @staticmethod
-    def detect(comment_bodies: List[str]) -> Dict:
+    def _detect_related_issues(comment_bodies: List[str], current_issue_id: str = None) -> List[Dict]:
+        found = {}
+        for comment in comment_bodies:
+            clean_comment = re.sub(r"<.*?>", "", comment)
+            for m in CommentSignalDetector.ISSUE_REF_PATTERN.finditer(clean_comment):
+                issue_id = m.group(1)
+                if current_issue_id and issue_id == str(current_issue_id):
+                    continue
+                lo = max(0, m.start() - CommentSignalDetector.REF_WINDOW)
+                hi = min(len(clean_comment), m.end() + CommentSignalDetector.REF_WINDOW)
+                window = clean_comment[lo:hi]
+                if CommentSignalDetector.REDIRECT_KEYWORDS.search(window):
+                    if issue_id not in found:
+                        found[issue_id] = {
+                            "issue_id": issue_id,
+                            "snippet": " ".join(window.split()),
+                        }
+        return list(found.values())
+
+    @staticmethod
+    def detect(comment_bodies: List[str], current_issue_id: str = None) -> Dict:
 
         detected = set()
         # The specific claim behind each signal, not just its generic
@@ -69,6 +102,9 @@ class CommentSignalDetector:
         return {
             "comment_signals": list(detected),
             "comment_signal_details": details,
+            "related_issues": CommentSignalDetector._detect_related_issues(
+                comment_bodies, current_issue_id
+            ),
             "confidence": "medium" if detected else "low"
         }
 

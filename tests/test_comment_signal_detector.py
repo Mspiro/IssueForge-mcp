@@ -64,3 +64,46 @@ class TestCommentSignalDetails:
     def test_empty_input_returns_empty_details(self):
         result = CommentSignalDetector.detect([])
         assert result["comment_signal_details"] == []
+
+
+class TestRelatedIssueDetection:
+    """
+    Regression coverage for issue #2915538: a comment favoring closing the
+    issue in favor of #2913927 produced no signal at all under the old
+    keyword-only detector, so a real redirect/duplicate discussion was
+    silently invisible to Step 2's structured analysis.
+    """
+
+    def test_redirect_language_near_issue_ref_detected(self):
+        comment = (
+            "It turns out that the halite library makes it really easy to "
+            "tell whether data has been base64-encoded or not ( #2913927: "
+            "Option for base64 encode/decode of encrypted data ). The "
+            "solution in that issue seems a lot cleaner than the one in "
+            "this issue, so I favor closing this issue in favor of the "
+            "other one."
+        )
+        result = CommentSignalDetector.detect([comment], current_issue_id="2915538")
+        related = result["related_issues"]
+        assert any(r["issue_id"] == "2913927" for r in related)
+
+    def test_incidental_issue_reference_not_flagged(self):
+        comment = "See #123456 for background on how this was originally discussed."
+        result = CommentSignalDetector.detect([comment], current_issue_id="2915538")
+        assert result["related_issues"] == []
+
+    def test_self_reference_not_flagged_as_related(self):
+        comment = "As noted in #2915538 above, favor closing this in favor of that."
+        result = CommentSignalDetector.detect([comment], current_issue_id="2915538")
+        assert result["related_issues"] == []
+
+    def test_empty_input_returns_empty_related_issues(self):
+        result = CommentSignalDetector.detect([])
+        assert result["related_issues"] == []
+
+    def test_current_issue_id_is_optional(self):
+        # detect() must stay callable with the old one-argument signature —
+        # existing callers (and this test file's other classes) don't pass
+        # current_issue_id.
+        result = CommentSignalDetector.detect(["Thanks for looking into this!"])
+        assert result["related_issues"] == []

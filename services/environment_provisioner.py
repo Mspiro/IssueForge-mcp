@@ -1,9 +1,11 @@
+import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
-from typing import Dict
+from typing import Dict, Tuple
 
 from config import (
     ENVIRONMENTS_DIR,
@@ -126,6 +128,113 @@ class EnvironmentProvisioner:
             return current == expected_ref or current == "HEAD"
         except Exception:
             return False
+
+    @staticmethod
+    def _port_is_free(port: int) -> bool:
+        """True if nothing is already listening on 127.0.0.1:<port>."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _find_free_port_pair(start: int = 33010, end: int = 33999) -> Tuple[int, int]:
+        """Find two consecutive free TCP ports for DDEV's router ports."""
+        port = start
+        while port < end:
+            if (
+                EnvironmentProvisioner._port_is_free(port)
+                and EnvironmentProvisioner._port_is_free(port + 1)
+            ):
+                return port, port + 1
+            port += 2
+        raise RuntimeError(f"No free port pair found in range {start}-{end}.")
+
+    @staticmethod
+    def _ddev_router_is_running() -> bool:
+        """
+        True if DDEV's shared router container is already up. It's one
+        container reused across every running DDEV project on the machine —
+        if it's already running, whatever it's bound to is DDEV's own
+        legitimate state (serving other currently-running projects), not a
+        conflict, and a new project just attaches to it. Checking port
+        availability in that case would misread the router's own bind as a
+        foreign-process conflict.
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "name=^ddev-router$",
+                 "--filter", "status=running", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return "ddev-router" in result.stdout
+        except Exception:
+            return False
+
+    @staticmethod
+    def _ensure_router_ports_free():
+        """
+        DDEV's router ports are global (shared by every DDEV project on this
+        machine), not per-project, so a per-project `ddev config` can't fix a
+        conflict here. A prior field session hit this exact failure twice:
+        DDEV's own port-80 fallback (33000) was silently held by an
+        unrelated host process (an IDE and its language server) — nothing to
+        do with Docker or DDEV state — and `ddev poweroff`, the documented
+        fix for stale DDEV state, did nothing, because the conflict wasn't
+        DDEV's own. Verify the *currently configured* router ports are
+        actually free before every `ddev start`, and remap to a confirmed-
+        free pair if not, rather than trusting DDEV's own fallback selection.
+
+        Only checks when the router isn't already running — see
+        _ddev_router_is_running().
+        """
+        if EnvironmentProvisioner._ddev_router_is_running():
+            return
+
+        try:
+            result = subprocess.run(
+                ["ddev", "config", "global", "--json-output"],
+                capture_output=True, text=True, timeout=15,
+            )
+            raw = json.loads(result.stdout).get("raw", {})
+            http_port = int(raw.get("router-http-port", 80))
+            https_port = int(raw.get("router-https-port", 443))
+        except Exception as e:
+            logger.warning("Could not read DDEV global router ports: %s", e)
+            return
+
+        if (
+            EnvironmentProvisioner._port_is_free(http_port)
+            and EnvironmentProvisioner._port_is_free(https_port)
+        ):
+            return
+
+        print(
+            f"[Provisioner] DDEV router port {http_port}/{https_port} is "
+            f"already in use by something else on this machine — picking a "
+            f"free pair instead."
+        )
+        try:
+            new_http, new_https = EnvironmentProvisioner._find_free_port_pair()
+        except RuntimeError as e:
+            logger.warning("%s Provisioning will proceed with the conflicting ports.", e)
+            return
+
+        ok = EnvironmentProvisioner.run_command(
+            ["ddev", "config", "global",
+             f"--router-http-port={new_http}", f"--router-https-port={new_https}"],
+            timeout=15,
+        )
+        if ok:
+            print(f"[Provisioner] DDEV router ports set to {new_http}/{new_https}.")
+        else:
+            logger.warning(
+                "Failed to reconfigure DDEV router ports — provisioning may "
+                "still hit the port conflict."
+            )
 
     @staticmethod
     def _cleanup(env_name: str, env_path: str):
@@ -405,6 +514,26 @@ class EnvironmentProvisioner:
             timeout=30,
         ):
             raise RuntimeError("Failed to configure DDEV.")
+
+        EnvironmentProvisioner._ensure_router_ports_free()
+
+        # Selenium/Chrome add-on, installed before the first `ddev start` so
+        # the container comes up in that same start (no extra restart). Any
+        # module whose tests are 100% FunctionalJavascript otherwise gets a
+        # false "all tests fail: connection refused on port 4444" signal
+        # from the regression checker, indistinguishable from a real
+        # regression, since there's no WebDriver for Chrome to run against.
+        print("Adding Selenium/Chrome add-on for browser-driven tests...")
+        selenium_ok = EnvironmentProvisioner.run_command(
+            ["ddev", "add-on", "get", "ddev/ddev-selenium-standalone-chrome"],
+            cwd=env_path, timeout=120,
+        )
+        if not selenium_ok:
+            logger.warning(
+                "Could not install the Selenium/Chrome add-on — "
+                "FunctionalJavascript tests will fail with a WebDriver "
+                "connection error, not a real regression."
+            )
 
         # 4. Start DDEV
         print("Starting DDEV...")

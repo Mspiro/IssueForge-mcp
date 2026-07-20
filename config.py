@@ -98,9 +98,16 @@ REGRESSION_HEALTH_TIMEOUT = int(os.getenv("ISSUEFORGE_HEALTH_TIMEOUT", "30"))
 REGRESSION_FULL_SUITE_TIMEOUT = int(os.getenv("ISSUEFORGE_FULL_SUITE_TIMEOUT", "900"))
 
 # Functional PHPUnit tests (BrowserTestBase) require these to bootstrap.
-# Defaults match DDEV's standard container conventions, so they hold for
-# any DDEV-provisioned environment without per-issue configuration.
-REGRESSION_SIMPLETEST_BASE_URL = os.getenv("ISSUEFORGE_SIMPLETEST_BASE_URL", "http://127.0.0.1")
+# "web" (not "127.0.0.1") because PHPUnit runs via `ddev exec`, which executes
+# inside the web container — but FunctionalJavascript tests drive a separate
+# WebDriver/Chrome container that must reach the site over DDEV's internal
+# network. "127.0.0.1" from that container's point of view is itself, not
+# the web container, so every JS test fails with a WebDriver connection
+# error regardless of the code under test. "web" resolves correctly from
+# any container on the network, including the web container itself, so one
+# value covers plain Functional and FunctionalJavascript tests alike — same
+# convention SIMPLETEST_DB below already uses ("db", not "127.0.0.1").
+REGRESSION_SIMPLETEST_BASE_URL = os.getenv("ISSUEFORGE_SIMPLETEST_BASE_URL", "http://web")
 REGRESSION_SIMPLETEST_DB = os.getenv("ISSUEFORGE_SIMPLETEST_DB", "mysql://db:db@db/db")
 REGRESSION_BROWSERTEST_OUTPUT_DIR = os.getenv("ISSUEFORGE_BROWSERTEST_OUTPUT_DIR", "/tmp")
 

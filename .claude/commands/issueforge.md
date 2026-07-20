@@ -12,21 +12,31 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 
 ## At the start of every /issueforge invocation
 
-Before Step 1 — regardless of whether an issue URL was given — print the
-dashboard's last-saved snapshot in one line (no live refresh call, instant):
+**If the user already gave an issue URL**, keep this to the free, instant
+snapshot and move straight to Step 1 — don't let it slow down the fast path:
 ```
 ! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py
 ```
-This auto-starts the local dashboard server if it isn't already running
-(reused across invocations — no duplicate processes, self-shuts-down after
-30 minutes idle) and prints a summary ("N tracked, N with new activity,
-N red pipelines, N credited") plus an `http://127.0.0.1:<port>` link —
-share that link so the user can open it in a browser. The page has its own
-Refresh button and a "Load full credit history" action, so don't run
-`dashboard.py refresh` from here — that's for the page itself or explicit
-CLI use, not something to trigger on every /issueforge startup.
-If the user already gave an issue URL, keep this to one line and move
-straight to Step 1; don't let it slow down the fast path.
+
+**If no issue URL was given yet** (the user is just checking in), run a
+live refresh instead — this is the moment to actually surface "did anything
+change on issues I'm tracking" rather than a possibly-stale cached count:
+```
+! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py refresh
+```
+This only re-checks issues not already in a terminal (closed/fixed) state,
+so cost scales with active work, not lifetime history (~9s for 3 active
+issues in practice, not the 44 total tracked) — a reasonable one-time cost
+here since the user isn't mid-task yet. If it surfaces new comments on a
+tracked issue, mention that explicitly (e.g. "issue #NNNNNNN has 2 new
+comments since you last checked") so it's an actual clue, not just a number.
+
+Either way, this auto-starts the local dashboard server if it isn't already
+running (reused across invocations — no duplicate processes, self-shuts-down
+after 30 minutes idle) and prints a summary ("N tracked, N with new
+activity, N red pipelines, N credited") plus an `http://127.0.0.1:<port>`
+link — share that link so the user can open it in a browser. The page has
+its own Refresh button too, for whenever the user wants to re-check mid-session.
 
 ## When the user gives a Drupal issue URL or ID
 

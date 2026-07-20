@@ -47,6 +47,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services.credential_manager import get_credentials
 from services.dashboard_builder import DashboardBuilder, OUTPUT_PATH
 from services.dashboard_ledger import DashboardLedger
 from services.dashboard_refresh import (
@@ -112,8 +113,30 @@ def cmd_build(args):
     return 0
 
 
+def _maybe_auto_import_credits(data: dict) -> dict:
+    """
+    First-run seed: a brand-new user's ledger starts genuinely empty (it's
+    gitignored — never shipped with the tool), so without this they'd see
+    "0 tracked" until they happened to discover `import-credits` exists on
+    their own. If the ledger is empty AND a drupal.org username is already
+    configured (from scripts/setup.py), pull the full credit history
+    automatically instead. Only fires once — after the first successful
+    import the ledger is no longer empty, so this is a no-op on every
+    later invocation.
+    """
+    if DashboardLedger.all_issues(data):
+        return data
+    if not get_credentials().get("drupal_username"):
+        return data
+    print("[Dashboard] First run detected — importing your drupal.org credit history...")
+    data = import_credit_history(progress=print)
+    DashboardBuilder.build(data)
+    return data
+
+
 def cmd_summary(args):
     data = DashboardLedger.load()
+    data = _maybe_auto_import_credits(data)
     issues = DashboardLedger.all_issues(data)
 
     link = f"file://{OUTPUT_PATH}"

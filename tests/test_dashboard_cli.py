@@ -18,6 +18,7 @@ class TestCmdSummary:
     def test_auto_starts_server_by_default(self, capsys):
         with patch("services.dashboard_ledger.DashboardLedger.load",
                    return_value={"issues": [], "generated_at": None}), \
+             patch("dashboard.get_credentials", return_value={"drupal_username": ""}), \
              patch("services.dashboard_server_manager.ensure_running",
                    return_value=(54321, False)):
             dashboard_cli.cmd_summary(_args())
@@ -27,6 +28,7 @@ class TestCmdSummary:
     def test_no_server_flag_skips_server_and_uses_file_link(self, capsys):
         with patch("services.dashboard_ledger.DashboardLedger.load",
                    return_value={"issues": [], "generated_at": None}), \
+             patch("dashboard.get_credentials", return_value={"drupal_username": ""}), \
              patch("services.dashboard_server_manager.ensure_running") as ensure_running:
             dashboard_cli.cmd_summary(_args(no_server=True))
         ensure_running.assert_not_called()
@@ -39,6 +41,7 @@ class TestCmdSummary:
         # summary must still print rather than crash the whole invocation.
         with patch("services.dashboard_ledger.DashboardLedger.load",
                    return_value={"issues": [], "generated_at": None}), \
+             patch("dashboard.get_credentials", return_value={"drupal_username": ""}), \
              patch("services.dashboard_server_manager.ensure_running",
                    side_effect=OSError("no sockets allowed")):
             result = dashboard_cli.cmd_summary(_args())
@@ -82,3 +85,42 @@ class TestCmdSummary:
         assert "1 tracked" in out
         assert "!99" in out
         assert "A bug" in out
+
+
+class TestMaybeAutoImportCredits:
+    """
+    Regression coverage: a brand-new user's ledger starts genuinely empty
+    (it's gitignored, never shipped with the tool) — without this, they'd
+    see "0 tracked" forever unless they happened to discover
+    `import-credits` exists on their own.
+    """
+
+    def test_non_empty_ledger_is_a_noop(self, capsys):
+        ledger = {"issues": [{"issue_id": "1"}], "generated_at": None}
+        with patch("dashboard.get_credentials") as mock_creds, \
+             patch("dashboard.import_credit_history") as mock_import:
+            result = dashboard_cli._maybe_auto_import_credits(ledger)
+        mock_creds.assert_not_called()
+        mock_import.assert_not_called()
+        assert result is ledger
+
+    def test_empty_ledger_no_username_is_a_noop(self, capsys):
+        empty = {"issues": [], "generated_at": None}
+        with patch("dashboard.get_credentials", return_value={"drupal_username": ""}), \
+             patch("dashboard.import_credit_history") as mock_import:
+            result = dashboard_cli._maybe_auto_import_credits(empty)
+        mock_import.assert_not_called()
+        assert result is empty
+
+    def test_empty_ledger_with_username_triggers_import(self, capsys):
+        empty = {"issues": [], "generated_at": None}
+        imported = {"issues": [{"issue_id": "1"}], "generated_at": None}
+        with patch("dashboard.get_credentials", return_value={"drupal_username": "meeni_dhobale"}), \
+             patch("dashboard.import_credit_history", return_value=imported) as mock_import, \
+             patch("services.dashboard_builder.DashboardBuilder.build") as mock_build:
+            result = dashboard_cli._maybe_auto_import_credits(empty)
+        mock_import.assert_called_once()
+        mock_build.assert_called_once_with(imported)
+        assert result == imported
+        out = capsys.readouterr().out
+        assert "First run detected" in out

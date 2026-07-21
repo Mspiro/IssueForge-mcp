@@ -167,8 +167,18 @@ class GitlabMrClient:
         namespace convention than the target project.
 
         Returns {"status": "success"/"failed"/"running"/..., "web_url": ...,
-        "sha": ...} for the newest pipeline, or None if the request fails or
-        no pipeline exists for that ref.
+        "sha": ..., "detailed_label": ..., "detailed_group": ...} for the
+        newest pipeline, or None if the request fails or no pipeline exists
+        for that ref.
+
+        "status" is GitLab's coarse top-level field — notably a pipeline
+        with a failed-but-allow_failure job still reports status="success"
+        there. "detailed_label"/"detailed_group" come from a second call to
+        the single-pipeline endpoint (the list endpoint above doesn't
+        include them) and surface that nuance, e.g. label="passed with
+        warnings", group="success-with-warnings" — this is what the GitLab
+        UI itself shows as a "Warning" badge. Both are None if that second
+        call fails; callers should treat "status" as the reliable fallback.
         """
         if not project_id:
             return None
@@ -185,11 +195,22 @@ class GitlabMrClient:
             if not data:
                 return None
             latest = data[0]
-            return {
+            result = {
                 "status": latest.get("status"),
                 "web_url": latest.get("web_url"),
                 "sha": latest.get("sha"),
+                "detailed_label": None,
+                "detailed_group": None,
             }
+            pipeline_id = latest.get("id")
+            if pipeline_id is not None:
+                detail_url = f"{GITLAB_API_BASE}/projects/{encoded}/pipelines/{pipeline_id}"
+                detail_resp = self._safe_get(detail_url)
+                if detail_resp is not None:
+                    detailed_status = detail_resp.json().get("detailed_status") or {}
+                    result["detailed_label"] = detailed_status.get("label")
+                    result["detailed_group"] = detailed_status.get("group")
+            return result
         except Exception as e:
             logger.warning(
                 "Could not fetch pipeline status for %s@%s: %s", project_id, ref, e

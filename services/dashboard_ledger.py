@@ -69,6 +69,7 @@ class DashboardLedger:
         issue_url: str = "",
         scenario: str = "",
         action_summary: str = "",
+        action_steps: Optional[List[str]] = None,
         comment_url: str = "",
         mr_project: str = "",
         mr_iid: str = "",
@@ -101,10 +102,11 @@ class DashboardLedger:
                 "last_worked": today,
                 "scenario": scenario,
                 "action_summary": action_summary,
+                "action_steps": action_steps or [],
                 "comment_url": comment_url,
                 "source": source,
                 "mr": {"project": mr_project, "iid": mr_iid, "state": None,
-                       "pipeline_status": None, "pipeline_url": None},
+                       "pipeline_status": None, "pipeline_label": None, "pipeline_url": None},
                 "status": {"value": None, "checked_at": None},
                 "comments": {"count_at_last_check": None, "checked_at": None},
                 "credit": {"credited": False, "checked_at": None},
@@ -121,11 +123,16 @@ class DashboardLedger:
                 # Real IssueForge work happening on an issue first seen via
                 # credit import — upgrade its identity, never downgrade.
                 entry["source"] = "issueforge"
+            if action_steps:
+                entry["action_steps"] = action_steps
+                entry["source"] = "issueforge"
             if comment_url:
                 entry["comment_url"] = comment_url
             if mr_project and mr_iid:
                 entry["mr"]["project"] = mr_project
                 entry["mr"]["iid"] = mr_iid
+            entry.setdefault("action_steps", [])
+            entry["mr"].setdefault("pipeline_label", None)
         return entry
 
     @staticmethod
@@ -133,6 +140,7 @@ class DashboardLedger:
                            comment_count: Optional[int] = None,
                            mr_state: Optional[str] = None,
                            pipeline_status: Optional[str] = None,
+                           pipeline_label: Optional[str] = None,
                            pipeline_url: Optional[str] = None,
                            credited: Optional[bool] = None) -> None:
         """Apply freshly-fetched live data onto an existing entry, in place."""
@@ -146,6 +154,8 @@ class DashboardLedger:
             entry["mr"]["state"] = mr_state
         if pipeline_status is not None:
             entry["mr"]["pipeline_status"] = pipeline_status
+        if pipeline_label is not None:
+            entry["mr"]["pipeline_label"] = pipeline_label
         if pipeline_url is not None:
             entry["mr"]["pipeline_url"] = pipeline_url
         if credited is not None:

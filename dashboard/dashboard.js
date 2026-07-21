@@ -32,7 +32,12 @@
     return STATUS_PILL[statusValue.toLowerCase()] || "gray";
   }
 
-  function pipelinePillClass(status) {
+  function pipelinePillClass(status, label) {
+    // detailed_label ("passed with warnings") is a more specific read on
+    // GitLab's own coarse top-level "success" status (which still reports
+    // "success" even when a job failed with allow_failure — see
+    // gitlab_mr_client.get_latest_pipeline_status) — check it first.
+    if (label && /warning/i.test(label)) return "amber";
     if (status === "success") return "green";
     if (status === "failed") return "red";
     if (status === "running" || status === "pending") return "amber";
@@ -72,6 +77,7 @@
     if (!searchTerm) return true;
     const haystack = [
       issue.issue_id, issue.title, issue.project, issue.action_summary,
+      ...(issue.action_steps || []),
     ].join(" ").toLowerCase();
     return haystack.includes(searchTerm);
   }
@@ -117,10 +123,14 @@
     let mrCell = "—";
     if (issue.mr && issue.mr.iid) {
       const pStatus = issue.mr.pipeline_status;
-      const pClass = pipelinePillClass(pStatus);
+      const pLabel = issue.mr.pipeline_label;
+      const pClass = pipelinePillClass(pStatus, pLabel);
       const mrUrl = `https://git.drupalcode.org/project/${issue.mr.project}/-/merge_requests/${issue.mr.iid}`;
-      mrCell = `<a href="${mrUrl}" target="_blank" rel="noopener">!${escapeHtml(issue.mr.iid)}</a> `
-        + `<span class="pill ${pClass}">${escapeHtml(pStatus || issue.mr.state || "unknown")}</span>`;
+      const pipelineText = pLabel || pStatus || issue.mr.state || "unknown";
+      const pipelinePill = issue.mr.pipeline_url
+        ? `<a href="${escapeHtml(issue.mr.pipeline_url)}" target="_blank" rel="noopener" class="pill ${pClass}">${escapeHtml(pipelineText)}</a>`
+        : `<span class="pill ${pClass}">${escapeHtml(pipelineText)}</span>`;
+      mrCell = `<a href="${mrUrl}" target="_blank" rel="noopener">!${escapeHtml(issue.mr.iid)}</a> ${pipelinePill}`;
     }
 
     let creditCell = '<span class="pill gray">not yet</span>';
@@ -132,8 +142,34 @@
     const sourceCell = source === "imported"
       ? '<span class="pill gray">imported</span>'
       : '<span class="pill blue">IssueForge</span>';
-    const whatWeDid = issue.action_summary
-      || (source === "imported" ? "(imported credit — not worked via IssueForge)" : "");
+    // A short step list renders inline fine, but a long one (the norm for
+    // a full IssueForge session — preview through push) would otherwise
+    // balloon every row's height and throw off the whole table's layout.
+    // Collapse behind <details> past a threshold so the closed row stays
+    // compact and only the one row a user expands grows.
+    const STEPS_INLINE_THRESHOLD = 3;
+    let whatWeDid;
+    let copyText = "";
+    if (issue.action_steps && issue.action_steps.length) {
+      const steps = issue.action_steps;
+      copyText = steps.map(s => `- ${s}`).join("\n");
+      const list = `<ul class="steps-list">${steps.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`;
+      if (steps.length > STEPS_INLINE_THRESHOLD) {
+        whatWeDid = `<details class="steps-details">`
+          + `<summary>${escapeHtml(steps[0])} <span class="steps-more">(+${steps.length - 1} more)</span></summary>`
+          + list
+          + `</details>`;
+      } else {
+        whatWeDid = list;
+      }
+    } else {
+      copyText = issue.action_summary || "";
+      whatWeDid = escapeHtml(copyText
+        || (source === "imported" ? "(imported credit — not worked via IssueForge)" : ""));
+    }
+    const copyBtn = copyText
+      ? `<button type="button" class="copy-btn" title="Copy what we did" aria-label="Copy what we did">⧉</button>`
+      : "";
 
     tr.innerHTML = `
       <td class="title-cell">
@@ -145,9 +181,54 @@
       <td>${mrCell}</td>
       <td>${creditCell}</td>
       <td>${sourceCell}</td>
-      <td>${escapeHtml(whatWeDid)}</td>
+      <td class="steps-cell"><div class="steps-wrap">${copyBtn}${whatWeDid}</div></td>
     `;
+
+    const btn = tr.querySelector(".copy-btn");
+    if (btn) {
+      // Bound via closure (not an inline HTML attribute) so arbitrary step
+      // text — quotes, newlines, whatever a user typed — never has to be
+      // escaped into an onclick string.
+      btn.addEventListener("click", () => {
+        copyToClipboard(copyText).then(() => {
+          const original = btn.textContent;
+          btn.textContent = "✓";
+          btn.classList.add("copied");
+          setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove("copied");
+          }, 1200);
+        });
+      });
+    }
     return tr;
+  }
+
+  function copyToClipboard(text) {
+    // navigator.clipboard requires a secure context — https:// or
+    // http://localhost (the served mode) both qualify, but a plain
+    // file:// page (the --no-server static fallback) does not, so that
+    // API is silently unavailable there. Fall back to the classic
+    // hidden-textarea + execCommand("copy") trick, which works from any
+    // origin including file://.
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise((resolve, reject) => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy") ? resolve() : reject();
+      } catch (e) {
+        reject(e);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    });
   }
 
   function render() {

@@ -6,9 +6,15 @@ demand. No data leaves this machine except the read-only API calls refresh
 itself makes to Drupal.org and GitLab.
 
     python scripts/dashboard.py record <ISSUE_ID> --project drupal \\
-        --title "..." --scenario B --summary "..." --comment-url "..." \\
-        [--mr-project drupal --mr-iid 12345]
+        --title "..." --scenario B --summary "..." \\
+        --step "Previewed and analyzed the issue" --step "Provisioned env" ... \\
+        --comment-url "..." [--mr-project drupal --mr-iid 12345]
         Add/update a ledger entry — call this at the end of Step 6.
+        --step is repeatable, one bullet point per step, in order; shown
+        as a bullet list in the "What we did" column (falls back to
+        --summary when omitted). Also does a best-effort, single-issue
+        live-status fetch afterward so this issue doesn't sit at "unknown"
+        until the next full refresh.
 
     python scripts/dashboard.py refresh
         Re-fetch live status (issue status, comment counts, MR/pipeline
@@ -51,7 +57,7 @@ from services.credential_manager import get_credentials
 from services.dashboard_builder import DashboardBuilder, OUTPUT_PATH
 from services.dashboard_ledger import DashboardLedger
 from services.dashboard_refresh import (
-    compute_lifetime_stats, import_credit_history, refresh_all, today,
+    compute_lifetime_stats, import_credit_history, refresh_after_record, refresh_all, today,
 )
 
 
@@ -66,13 +72,23 @@ def cmd_record(args):
         issue_url=args.issue_url or "",
         scenario=args.scenario or "",
         action_summary=args.summary or "",
+        action_steps=args.step or None,
         comment_url=args.comment_url or "",
         mr_project=args.mr_project or "",
         mr_iid=args.mr_iid or "",
     )
     DashboardLedger.save(data)
-    DashboardBuilder.build(data)
     print(f"[Dashboard] Recorded issue #{args.issue_id} ({args.project}).")
+
+    # Best-effort: fetch this one issue's live status now, so it shows real
+    # values instead of "unknown" until the next full refresh. Never blocks
+    # or fails the record step itself — see refresh_after_record()'s
+    # docstring for why this is scoped to one issue, not refresh_all().
+    live_summary = refresh_after_record(args.issue_id)
+    print(f"[Dashboard] Live status: {live_summary}")
+
+    data = DashboardLedger.load()
+    DashboardBuilder.build(data)
     print(f"[Dashboard] {OUTPUT_PATH}")
     return 0
 
@@ -190,6 +206,12 @@ def main():
     p_record.add_argument("--issue-url", default="")
     p_record.add_argument("--scenario", default="", choices=["", "A", "B", "C", "D"])
     p_record.add_argument("--summary", default="")
+    p_record.add_argument("--step", action="append",
+                          help="One bullet point of what was done, in order. Repeat "
+                               "--step for each step (e.g. --step \"Provisioned env\" "
+                               "--step \"Reproduced the bug\") — rendered as a bullet "
+                               "list in the dashboard's 'What we did' column, falling "
+                               "back to --summary when omitted.")
     p_record.add_argument("--comment-url", default="")
     p_record.add_argument("--mr-project", default="")
     p_record.add_argument("--mr-iid", default="")

@@ -34,6 +34,124 @@ def today() -> str:
     return datetime.date.today().isoformat()
 
 
+def _refresh_entry(entry: Dict, api_client: DrupalAPIClient, mr_client: GitlabMrClient,
+                    day: str) -> Dict[str, Optional[str]]:
+    """
+    Re-fetch live status (issue status, comment count, MR state/pipeline)
+    for ONE ledger entry and apply it in place. Shared by refresh_all()
+    (loops this over every tracked issue) and refresh_after_record() (calls
+    it once, right after Step 7 records a session, so the issue just
+    worked shows real status immediately instead of "unknown" until the
+    next full refresh).
+
+    Returns {"status": ..., "mr_state": ..., "pipeline_status": ...,
+    "pipeline_label": ..., "status_error": ...} for logging/progress
+    messages — the entry itself already has the update applied.
+    "status_error" is the exception message when the issue-status fetch
+    failed, else None — refresh_all() surfaces this as a "[Skip]" progress
+    line, which dashboard_app.py's /api/refresh counts for its summary.
+    """
+    issue_id = entry["issue_id"]
+    project = entry.get("project", "drupal")
+    issue_url = entry.get("issue_url") or f"https://www.drupal.org/project/{project}/issues/{issue_id}"
+
+    status_value = None
+    comment_count = None
+    status_error = None
+    try:
+        metadata = api_client.get_issue_metadata(issue_url)
+        status_value = metadata.get("status")
+        comment_count = len(metadata.get("comment_ids", []))
+    except Exception as e:
+        logger.warning("Could not fetch issue status for #%s: %s", issue_id, e)
+        status_error = str(e)
+
+    prior_count = entry.get("comments", {}).get("count_at_last_check")
+    new_since = None
+    if comment_count is not None and prior_count is not None:
+        new_since = max(0, comment_count - prior_count)
+
+    pipeline_status = None
+    pipeline_label = None
+    pipeline_url = None
+    mr_state = None
+    mr = entry.get("mr", {})
+    if mr.get("project") and mr.get("iid"):
+        details = mr_client.get_mr_details(mr["project"], mr["iid"])
+        if details:
+            mr_state = details.get("state")
+            source_branch = details.get("source_branch")
+            source_project_id = details.get("source_project_id")
+            # Pipelines run in the SOURCE project (the issue fork),
+            # not the target project this MR is opened against.
+            if source_branch and source_project_id:
+                pipeline = mr_client.get_latest_pipeline_status(
+                    source_project_id, source_branch
+                )
+                if pipeline:
+                    pipeline_status = pipeline.get("status")
+                    pipeline_label = pipeline.get("detailed_label")
+                    pipeline_url = pipeline.get("web_url")
+
+    DashboardLedger.update_live_status(
+        entry,
+        checked_at=day,
+        status=status_value,
+        comment_count=comment_count,
+        mr_state=mr_state,
+        pipeline_status=pipeline_status,
+        pipeline_label=pipeline_label,
+        pipeline_url=pipeline_url,
+    )
+    if new_since is not None:
+        entry.setdefault("comments", {})["new_since_last_check"] = new_since
+
+    return {
+        "status": status_value,
+        "mr_state": mr_state,
+        "pipeline_status": pipeline_status,
+        "pipeline_label": pipeline_label,
+        "new_since": new_since,
+        "status_error": status_error,
+    }
+
+
+def refresh_after_record(issue_id: str) -> str:
+    """
+    Best-effort, single-issue live refresh — called right after
+    scripts/dashboard.py record so the just-worked issue shows real status
+    (issue status, MR state, pipeline) immediately instead of "unknown"
+    until the next full refresh. Deliberately scoped to ONE issue: a full
+    refresh_all() would re-check every tracked issue's live state on every
+    single Step 7 call, which scales with lifetime history instead of the
+    one issue that actually just changed.
+
+    Never raises — network failures here are non-fatal to Step 7's
+    bookkeeping; on any error this returns a short message and leaves the
+    entry's fields as record() set them (i.e. still "unknown" until the
+    next refresh).
+    """
+    data = DashboardLedger.load()
+    entry = DashboardLedger.find(data, issue_id)
+    if entry is None:
+        return "not found in ledger"
+
+    try:
+        creds = get_credentials()
+        api_client = DrupalAPIClient()
+        mr_client = GitlabMrClient(token=creds.get("gitlab_token", ""))
+        result = _refresh_entry(entry, api_client, mr_client, today())
+        DashboardLedger.save(data)
+        summary = f"status={result['status'] or '?'}"
+        if entry.get("mr", {}).get("iid"):
+            pipeline_desc = result["pipeline_label"] or result["pipeline_status"] or "?"
+            summary += f" mr!{entry['mr']['iid']}={result['mr_state'] or '?'}/{pipeline_desc}"
+        return summary
+    except Exception as e:
+        logger.warning("Could not live-refresh #%s after record: %s", issue_id, e)
+        return f"skipped ({e})"
+
+
 def refresh_all(progress=None, force: bool = False) -> Dict:
     """
     Re-fetch live status for every tracked issue and persist the ledger.
@@ -74,8 +192,6 @@ def refresh_all(progress=None, force: bool = False) -> Dict:
     skipped_terminal = 0
     for entry in issues:
         issue_id = entry["issue_id"]
-        project = entry.get("project", "drupal")
-        issue_url = entry.get("issue_url") or f"https://www.drupal.org/project/{project}/issues/{issue_id}"
 
         current_status = (entry.get("status", {}).get("value") or "").lower()
         if not force and current_status in TERMINAL_STATUSES:
@@ -84,56 +200,16 @@ def refresh_all(progress=None, force: bool = False) -> Dict:
             skipped_terminal += 1
             continue
 
-        status_value = None
-        comment_count = None
-        try:
-            metadata = api_client.get_issue_metadata(issue_url)
-            status_value = metadata.get("status")
-            comment_count = len(metadata.get("comment_ids", []))
-        except Exception as e:
-            _report(f"  [Skip] #{issue_id}: could not fetch issue status ({e})")
-
-        prior_count = entry.get("comments", {}).get("count_at_last_check")
-        new_since = None
-        if comment_count is not None and prior_count is not None:
-            new_since = max(0, comment_count - prior_count)
-
-        pipeline_status = None
-        pipeline_url = None
-        mr_state = None
+        result = _refresh_entry(entry, api_client, mr_client, day)
+        if result["status_error"]:
+            _report(f"  [Skip] #{issue_id}: could not fetch issue status ({result['status_error']})")
+            continue
         mr = entry.get("mr", {})
-        if mr.get("project") and mr.get("iid"):
-            details = mr_client.get_mr_details(mr["project"], mr["iid"])
-            if details:
-                mr_state = details.get("state")
-                source_branch = details.get("source_branch")
-                source_project_id = details.get("source_project_id")
-                # Pipelines run in the SOURCE project (the issue fork),
-                # not the target project this MR is opened against.
-                if source_branch and source_project_id:
-                    pipeline = mr_client.get_latest_pipeline_status(
-                        source_project_id, source_branch
-                    )
-                    if pipeline:
-                        pipeline_status = pipeline.get("status")
-                        pipeline_url = pipeline.get("web_url")
-
-        DashboardLedger.update_live_status(
-            entry,
-            checked_at=day,
-            status=status_value,
-            comment_count=comment_count,
-            mr_state=mr_state,
-            pipeline_status=pipeline_status,
-            pipeline_url=pipeline_url,
-        )
-        if new_since is not None:
-            entry.setdefault("comments", {})["new_since_last_check"] = new_since
-
+        pipeline_desc = result["pipeline_label"] or result["pipeline_status"]
         _report(
-            f"  #{issue_id}: status={status_value or '?'}"
-            + (f" mr!{mr['iid']}={mr_state}/{pipeline_status}" if mr.get("iid") else "")
-            + (f" (+{new_since} new comments)" if new_since else "")
+            f"  #{issue_id}: status={result['status'] or '?'}"
+            + (f" mr!{mr['iid']}={result['mr_state']}/{pipeline_desc}" if mr.get("iid") else "")
+            + (f" (+{result['new_since']} new comments)" if result["new_since"] else "")
         )
 
     if skipped_terminal:

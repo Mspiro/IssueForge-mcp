@@ -2,6 +2,8 @@ import re
 import subprocess
 from typing import Dict, List, Optional
 
+from services.distribution_registry import KNOWN_DISTRIBUTIONS
+
 
 class VersionResolver:
     """
@@ -191,10 +193,44 @@ class VersionResolver:
             return max(minor_branches, key=lambda b: int(b.split(".")[1]))
         return VersionResolver.FALLBACK_CORE_BRANCHES.get(core_major, "11.x")
 
+    # Used when `git ls-remote --symref` is unavailable (offline/timeout).
+    DISTRIBUTION_FALLBACK_BRANCH = "2.x"
+
+    @staticmethod
+    def _resolve_distribution_default_branch(repo: str) -> str:
+        """
+        Resolve a distribution repo's actual default branch (its HEAD symref)
+        rather than guessing — distributions don't share core's branch
+        numbering, and drupal.org issues for them don't reliably carry a
+        usable per-issue version string (verified: every real Drupal CMS
+        issue sampled had `field_issue_version: null`), so there's nothing
+        meaningful to normalize from issue metadata here.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", "--symref", repo, "HEAD"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                m = re.search(r"^ref:\s*refs/heads/(\S+)\s+HEAD", result.stdout, re.MULTILINE)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+        return VersionResolver.DISTRIBUTION_FALLBACK_BRANCH
+
     @staticmethod
     def resolve(metadata: Dict) -> Dict:
         project_name = metadata.get("project_name", "drupal")
         raw_version = metadata.get("version", "main")
+
+        if project_name in KNOWN_DISTRIBUTIONS:
+            repo = f"https://git.drupalcode.org/project/{project_name}.git"
+            return {
+                "checkout_ref": VersionResolver._resolve_distribution_default_branch(repo),
+                "project_type": "php",
+                "php_version": "8.4",
+            }
 
         if project_name != "drupal":
             contrib_branch = VersionResolver.normalize_branch(raw_version)

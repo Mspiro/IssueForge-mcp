@@ -434,6 +434,11 @@ class EnvironmentProvisioner:
         git_email = env_plan.get("git_email", GIT_USER_EMAIL) or "issueforge@example.com"
 
         try:
+            if env_plan.get("is_distribution"):
+                return EnvironmentProvisioner._provision_distribution(
+                    issue_id, env_name, env_path, env_plan, checkout_ref,
+                    git_name=git_name, git_email=git_email,
+                )
             return EnvironmentProvisioner._provision_full(
                 issue_id, env_name, env_path, env_plan, checkout_ref,
                 git_name=git_name, git_email=git_email,
@@ -760,6 +765,197 @@ class EnvironmentProvisioner:
         print(f"Working branch: {workspace['branch']}")
         if work_root != env_path:
             print(f"Working repo:   {work_root}")
+        print(f"Push command:   {GitWorkspaceManager.get_push_command(work_root)}\n")
+
+        return {
+            "success": True,
+            "env_name": env_name,
+            "env_path": env_path,
+            "work_root": work_root,
+            "site_url": site_url,
+            "reused": False,
+            "branch": workspace["branch"],
+        }
+
+    # Total user-visible stages printed by _provision_distribution — kept
+    # separate from TOTAL_STAGES (used by _provision_full) since the two
+    # sequences differ; a distribution's own DDEV config handles composer.json
+    # generation + install via its post-start hooks, so there's no separate
+    # "install Drush" / "apply profile recipe" stage the way core has.
+    DISTRIBUTION_TOTAL_STAGES = 6
+
+    @staticmethod
+    def _distribution_stage(n: int, label: str, eta: str = ""):
+        suffix = f" — {eta}" if eta else ""
+        print(
+            f"\n[STAGE {n}/{EnvironmentProvisioner.DISTRIBUTION_TOTAL_STAGES}] {label}{suffix}",
+            flush=True,
+        )
+
+    @staticmethod
+    def _provision_distribution(
+        issue_id: str,
+        env_name: str,
+        env_path: str,
+        env_plan: Dict,
+        checkout_ref: str,
+        git_name: str = "IssueForge User",
+        git_email: str = "issueforge@example.com",
+    ) -> Dict:
+        """
+        Provision a Drupal *distribution* (e.g. Drupal CMS) — a full
+        composer project with its own repo layout, DDEV config, and
+        installer, fundamentally different from a bare core checkout or a
+        contrib module nested inside one. See _provision_full() for that
+        other path, which this deliberately does not share code with
+        (kept as an independent method so nothing here can affect it).
+
+        Every command below was manually verified working, end to end,
+        against the real Drupal CMS repo before being encoded here.
+        """
+        project_name = env_plan.get("project_name", "")
+
+        # 1. Stop and remove any pre-existing conflicting project.
+        EnvironmentProvisioner.run_command(
+            ["ddev", "stop", "--omit-snapshot", "--unlist", env_name],
+            cwd=os.path.dirname(env_path),
+            timeout=30,
+        )
+        if os.path.exists(env_path):
+            logger.info("Removing existing directory %s", env_path)
+            shutil.rmtree(env_path, ignore_errors=True)
+
+        # 2. Clone the distribution's own repo directly into env_path — it
+        # IS the project root (unlike a contrib module, which nests inside
+        # a separate core checkout).
+        repo = env_plan.get(
+            "repository", f"https://git.drupalcode.org/project/{project_name}.git"
+        )
+        clone_depth = str(PROVISIONER_CLONE_DEPTH)
+        EnvironmentProvisioner._distribution_stage(
+            1, f"Cloning {project_name} ({checkout_ref})", "~1 min"
+        )
+        print(f"Cloning {project_name} ({checkout_ref}, depth={clone_depth}) into {env_path}...")
+        if not EnvironmentProvisioner.run_command(
+            ["git", "clone", "--branch", checkout_ref, "--depth", clone_depth, repo, env_path],
+            timeout=300,
+        ):
+            raise RuntimeError(f"Failed to clone {project_name} repository.")
+
+        # 3. Configure DDEV. Verified values for Drupal CMS's own repo
+        # layout (composer root at the repo root, docroot at web/).
+        EnvironmentProvisioner._distribution_stage(2, "Configuring and starting DDEV", "~30s")
+        print("Configuring DDEV...")
+        if not EnvironmentProvisioner.run_command(
+            ["ddev", "config", "--project-type=php", "--docroot=web",
+             f"--project-name={env_name}"],
+            cwd=env_path, timeout=30,
+        ):
+            raise RuntimeError("Failed to configure DDEV.")
+
+        EnvironmentProvisioner._ensure_router_ports_free()
+
+        # Only fetch the Selenium/Chrome add-on if this checkout doesn't
+        # already vendor it (verified: Drupal CMS ships it in its own
+        # .ddev/ directory) — never overwrite a repo-pinned addon version.
+        selenium_config = os.path.join(
+            env_path, ".ddev", "config.selenium-standalone-chrome.yaml"
+        )
+        if not os.path.exists(selenium_config):
+            print("Adding Selenium/Chrome add-on for browser-driven tests...")
+            selenium_ok = EnvironmentProvisioner.run_command(
+                ["ddev", "add-on", "get", "ddev/ddev-selenium-standalone-chrome"],
+                cwd=env_path, timeout=120,
+            )
+            if not selenium_ok:
+                logger.warning(
+                    "Could not install the Selenium/Chrome add-on — "
+                    "FunctionalJavascript tests will fail with a WebDriver "
+                    "connection error, not a real regression."
+                )
+
+        # 4. Start DDEV. Verified: this alone triggers the repo's own
+        # .ddev/config.dev.yaml post-start hooks (regenerating composer.json
+        # from project_template/composer.json + dev.composer.json, then
+        # running composer install) — DDEV auto-merges .ddev/config.*.yaml
+        # on start, so none of that needs reimplementing here.
+        print("Starting DDEV (this runs the distribution's own composer "
+              "install via its post-start hooks)...")
+        if not EnvironmentProvisioner.run_command(
+            ["ddev", "start"], cwd=env_path, timeout=PROVISIONER_COMMAND_TIMEOUT
+        ):
+            raise RuntimeError("Failed to start DDEV.")
+
+        # 5. Site install via the distribution's own installer — no
+        # profile argument (unlike core's `drush si <profile>`; verified
+        # against Drupal CMS's own documented Drush install command).
+        EnvironmentProvisioner._distribution_stage(
+            3, f"Installing {project_name} site", "~1-2 min"
+        )
+        print(f"Installing {project_name} site...")
+        if not EnvironmentProvisioner.run_command(
+            ["ddev", "drush", "site:install", "--yes"],
+            cwd=env_path, timeout=PROVISIONER_COMMAND_TIMEOUT,
+        ):
+            raise RuntimeError(f"Failed to install {project_name} site.")
+
+        # 6. Enable modules/themes — identical to the core path; drush
+        # doesn't care how the site was installed.
+        EnvironmentProvisioner._distribution_stage(4, "Enabling modules/themes")
+        required_modules = env_plan.get("required_modules", [])
+        if required_modules:
+            print(f"Enabling modules: {required_modules}...")
+            if not EnvironmentProvisioner.run_command(
+                ["ddev", "drush", "en"] + required_modules + ["-y"],
+                cwd=env_path, timeout=120,
+            ):
+                raise RuntimeError(f"Failed to enable modules: {required_modules}")
+
+        required_themes = env_plan.get("required_themes", [])
+        if required_themes:
+            print(f"Enabling themes: {required_themes}...")
+            if not EnvironmentProvisioner.run_command(
+                ["ddev", "drush", "theme:enable"] + required_themes + ["-y"],
+                cwd=env_path, timeout=60,
+            ):
+                raise RuntimeError(f"Failed to enable themes: {required_themes}")
+            EnvironmentProvisioner.run_command(
+                ["ddev", "drush", "config:set", "system.theme",
+                 "default", required_themes[0], "-y"],
+                cwd=env_path, timeout=30,
+            )
+
+        EnvironmentProvisioner._distribution_stage(5, "Git workspace + issue fork remote")
+        # 7. Git workspace: identity + working branch. work_root == env_path
+        # here — the distribution's own repo IS the repo under test, no
+        # nested module directory the way contrib issues have.
+        from services.git_workspace_manager import GitWorkspaceManager
+        work_root = env_path
+        workspace = GitWorkspaceManager.setup_workspace(
+            work_root, issue_id, git_name, git_email
+        )
+        if workspace.get("warnings"):
+            for w in workspace["warnings"]:
+                logger.warning(w)
+
+        # 8. Add the Drupal.org issue fork as a remote.
+        EnvironmentProvisioner._distribution_stage(6, "Finalizing")
+        fork_info = GitWorkspaceManager.setup_issue_remote(
+            work_root, project_name, issue_id
+        )
+        if fork_info.get("fetched") and fork_info.get("remote_branches"):
+            print(
+                f"[Fork] Existing branches on issue fork: "
+                f"{', '.join(fork_info['remote_branches'])}"
+            )
+        else:
+            GitWorkspaceManager.wait_for_fork(
+                work_root, project_name, issue_id
+            )
+
+        site_url = f"https://{env_name}.ddev.site"
+        print(f"\nEnvironment successfully created! Access url: {site_url}")
+        print(f"Working branch: {workspace['branch']}")
         print(f"Push command:   {GitWorkspaceManager.get_push_command(work_root)}\n")
 
         return {

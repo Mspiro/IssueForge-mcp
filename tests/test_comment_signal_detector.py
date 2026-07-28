@@ -107,3 +107,61 @@ class TestRelatedIssueDetection:
         # current_issue_id.
         result = CommentSignalDetector.detect(["Thanks for looking into this!"])
         assert result["related_issues"] == []
+
+
+class TestEnvironmentSignalDetection:
+    """
+    Regression coverage for issue #3537777: a commenter tested the fix
+    against Drupal CMS while the issue itself is filed under plain Drupal
+    core — nothing in the pipeline surfaced that mismatch automatically
+    before this. environment_signals is read-only, informational only: it
+    must never change environment_plan, only flag something for the user
+    to weigh before Step 3 provisions anything.
+    """
+
+    def test_git_clone_of_different_project_detected(self):
+        comment = (
+            "mkdir dftmedia\ncd dftmedia\n"
+            "git clone https://git.drupalcode.org/project/drupal_cms.git\n"
+            "cd drupal_cms\nddev config --database=mariadb:10.11\nddev start"
+        )
+        result = CommentSignalDetector.detect(
+            [comment], current_project_name="drupal"
+        )
+        signals = result["environment_signals"]
+        assert any(
+            s["type"] == "different_project_cloned" and s["detail"] == "drupal_cms"
+            for s in signals
+        )
+
+    def test_git_clone_of_same_project_not_flagged(self):
+        comment = "git clone https://git.drupalcode.org/project/drupal_cms.git"
+        result = CommentSignalDetector.detect(
+            [comment], current_project_name="drupal_cms"
+        )
+        assert result["environment_signals"] == []
+
+    def test_distribution_name_mentioned_without_clone_detected(self):
+        comment = "Reproduce the fault on that new installation of Drupal CMS."
+        result = CommentSignalDetector.detect([comment], current_project_name="drupal")
+        signals = result["environment_signals"]
+        assert any(s["type"] == "distribution_mentioned" for s in signals)
+
+    def test_version_mentioned_near_action_verb_detected(self):
+        comment = "I reproduced this on Drupal 10.3 with no issues."
+        result = CommentSignalDetector.detect([comment])
+        signals = result["environment_signals"]
+        assert any(s["type"] == "version_mentioned" for s in signals)
+
+    def test_unrelated_comment_produces_no_environment_signal(self):
+        result = CommentSignalDetector.detect(["Thanks for looking into this!"])
+        assert result["environment_signals"] == []
+
+    def test_current_project_name_is_optional(self):
+        # Must stay callable without current_project_name, same as
+        # current_issue_id above.
+        comment = "git clone https://git.drupalcode.org/project/drupal_cms.git"
+        result = CommentSignalDetector.detect([comment])
+        assert any(
+            s["type"] == "different_project_cloned" for s in result["environment_signals"]
+        )

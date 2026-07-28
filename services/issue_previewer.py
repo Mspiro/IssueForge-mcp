@@ -148,7 +148,8 @@ class IssuePreviewer:
             sep,
             f"  Issue       : {plan.get('issue_title', '(unknown)')}",
             f"  Branch      : {ep.get('checkout_ref', '?')}   PHP: {ep.get('php_version', '?')}",
-            f"  Project     : {ep.get('project_name', 'drupal')}  ({'contrib' if ep.get('is_contrib') else 'core'})",
+            f"  Project     : {ep.get('project_name', 'drupal')}  "
+            f"({'distribution' if ep.get('is_distribution') else ('contrib' if ep.get('is_contrib') else 'core')})",
             "",
         ]
 

@@ -3,6 +3,7 @@ from typing import Dict, List
 from services.module_requirement_detector import ModuleRequirementDetector
 from services.theme_requirement_detector import ThemeRequirementDetector
 from services.version_resolver import VersionResolver
+from services.distribution_registry import KNOWN_DISTRIBUTIONS
 
 
 class EnvironmentPlanner:
@@ -49,7 +50,8 @@ class EnvironmentPlanner:
         latest_patch_id = patch_ids[-1] if patch_ids else None
 
         project_name = metadata.get("project_name", "drupal")
-        is_contrib = (project_name != "drupal")
+        is_distribution = project_name in KNOWN_DISTRIBUTIONS
+        is_contrib = (project_name != "drupal") and not is_distribution
 
         if is_contrib and project_name not in required_modules:
             required_modules.append(project_name)
@@ -64,11 +66,21 @@ class EnvironmentPlanner:
             if ThemeRequirementDetector.is_contrib(t)
         ]
 
-        return {
-            "repository": "https://git.drupalcode.org/project/drupal.git",
+        repository = (
+            f"https://git.drupalcode.org/project/{project_name}.git"
+            if is_distribution
+            else "https://git.drupalcode.org/project/drupal.git"
+        )
+        # Distributions install via their own installer (e.g. Drupal CMS's
+        # `drush site:install --yes`, no profile argument) — "standard" is
+        # core's install profile and doesn't apply here.
+        install_profile = None if is_distribution else "standard"
+
+        plan = {
+            "repository": repository,
             "checkout_ref": version_info["checkout_ref"],
             "component": component,
-            "install_profile": "standard",
+            "install_profile": install_profile,
             "project_type": version_info["project_type"],
             "required_modules": required_modules,
             "required_themes": required_themes,
@@ -78,6 +90,10 @@ class EnvironmentPlanner:
             "patch_available": bool(latest_patch_id),
             "latest_patch_id": latest_patch_id,
             "is_contrib": is_contrib,
+            "is_distribution": is_distribution,
             "project_name": project_name,
             "contrib_branch": version_info.get("contrib_branch") if is_contrib else None,
         }
+        if is_distribution:
+            plan["distribution_name"] = project_name
+        return plan

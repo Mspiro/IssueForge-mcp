@@ -35,6 +35,13 @@ def main():
         # redirect/duplicate language (e.g. "favor closing this in favor of
         # #NNNNNNN") — read-only signal, never auto-fetched. See Step 2.
         "related_issues":          plan.get("related_issues", []),
+        # Flagged when a comment mentions a different tested environment —
+        # a git-clone of a different drupal.org project, a named
+        # distribution (Drupal CMS, Thunder, ...), or an explicit core/PHP
+        # version near "tested"/"reproduced"/"using". Never auto-applied to
+        # the plan below — surface it and let the user decide before
+        # Step 3 provisions anything. See Step 2.
+        "environment_signals":     plan.get("environment_signals", []),
         "modified_files":           plan.get("modified_files", []),
         "reproduction_steps":       plan.get("reproduction_steps", []),
         "detected_mrs":             plan.get("detected_mrs", []),

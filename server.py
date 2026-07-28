@@ -102,7 +102,9 @@ class IssueForgeServer:
             ]
 
         comment_signal_result = CommentSignalDetector.detect(
-            comment_bodies, current_issue_id=metadata.get("issue_id")
+            comment_bodies,
+            current_issue_id=metadata.get("issue_id"),
+            current_project_name=metadata.get("project_name"),
         )
 
         # Step 7b: detect MRs — goes through the shared detector so preview

@@ -102,6 +102,16 @@ class EnvironmentProvisioner:
             cwd=env_path, timeout=180,
         )
         if not recipe_ok:
+            # Fallback only — core's `main` branch moved recipe application
+            # out of core/scripts/dr's own command set (its `recipe` command
+            # no longer exists there) and into `drush recipe` instead. Older
+            # checkouts where the script-based path above already succeeds
+            # never reach this.
+            recipe_ok = EnvironmentProvisioner.run_command(
+                ["ddev", "drush", "recipe", f"core/recipes/{recipe_name}"],
+                cwd=env_path, timeout=180,
+            )
+        if not recipe_ok:
             logger.warning(
                 "Recipe application for '%s' failed — the site may be missing "
                 "default content types (e.g. 'page'). Continuing provisioning.",
@@ -516,11 +526,15 @@ class EnvironmentProvisioner:
         if not (is_contrib and project_name != "drupal"):
             EnvironmentProvisioner._stage(2, "Contrib module setup (skipped — core issue)")
         project_type = env_plan.get("project_type", "drupal11")
+        php_version = env_plan.get("php_version")
         EnvironmentProvisioner._stage(3, "Configuring and starting DDEV", "~30s")
         print("Configuring DDEV...")
+        config_args = ["ddev", "config", f"--project-type={project_type}",
+                        "--docroot=", f"--project-name={env_name}"]
+        if php_version:
+            config_args.append(f"--php-version={php_version}")
         if not EnvironmentProvisioner.run_command(
-            ["ddev", "config", f"--project-type={project_type}",
-             "--docroot=", f"--project-name={env_name}"],
+            config_args,
             cwd=env_path,
             timeout=30,
         ):
@@ -576,6 +590,36 @@ class EnvironmentProvisioner:
                     ["ddev", "composer", "update", "drush/drush"],
                     cwd=env_path, timeout=180,
                 )
+            if not drush_ok:
+                # Fallback only — the block above is untouched and remains
+                # the path every currently-working Drupal version takes.
+                # This only fires when that normal resolution actually fails,
+                # which happens on core's `main` branch: core there requires
+                # symfony/event-dispatcher ^8, but no tagged Drush release
+                # (as of 13.7.6) supports anything past ^7. Drush's own
+                # `14.x` development branch already declares ^7||^8 support,
+                # so retry against that specific ref with a full dependency
+                # re-resolution instead of Drush's default (partial-update)
+                # pin to the latest stable tag.
+                logger.warning(
+                    "Default Drush install failed — retrying against "
+                    "drush/drush:14.x-dev (works around core main's "
+                    "Symfony 8 requirement, which no tagged Drush release "
+                    "supports yet)."
+                )
+                EnvironmentProvisioner.run_command(
+                    ["ddev", "composer", "remove", "drush/drush", "--dev", "--no-update"],
+                    cwd=env_path, timeout=60,
+                )
+                drush_ok = EnvironmentProvisioner.run_command(
+                    ["ddev", "composer", "require", "drush/drush:14.x-dev", "--dev", "--no-update"],
+                    cwd=env_path, timeout=60,
+                )
+                if drush_ok:
+                    drush_ok = EnvironmentProvisioner.run_command(
+                        ["ddev", "composer", "update", "drush/drush", "--with-all-dependencies"],
+                        cwd=env_path, timeout=180,
+                    )
             if not drush_ok:
                 raise RuntimeError("Failed to install Drush.")
 

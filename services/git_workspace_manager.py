@@ -256,12 +256,23 @@ class GitWorkspaceManager:
         there as commits, locally as an applied diff), so pushing
         HEAD:<branch> from it is rejected as non-fast-forward.
 
-        Refuses to run on a dirty tree — a checkout over uncommitted changes
-        that overlap the MR's files would either conflict or silently mix
-        states. Returns {success, branch, message}.
+        Refuses to run when TRACKED changes are uncommitted — a checkout
+        over those would either conflict or silently mix states. Untracked
+        files (composer's vendor/, DDEV's .ddev/, Drupal's generated
+        settings.php, etc. — normal artifacts in every provisioned
+        environment) are not a real conflict risk here: `git checkout` only
+        refuses over an untracked file when the target branch's tree would
+        actually overwrite that exact path, and it enforces that itself:
+        this pre-check used to also reject on ANY untracked file, refusing
+        every checkout attempt in a real provisioned environment
+        unconditionally, since one always has some untracked cruft lying
+        around.
         """
         status = GitWorkspaceManager._git(["status", "--porcelain"], env_path)
-        if status.stdout.strip():
+        tracked_changes = [
+            line for line in status.stdout.splitlines() if not line.startswith("??")
+        ]
+        if tracked_changes:
             return {
                 "success": False,
                 "branch": branch,

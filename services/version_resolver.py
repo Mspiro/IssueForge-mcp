@@ -224,6 +224,19 @@ class VersionResolver:
                 "core_version_requirement": requirement,
             }
 
+        # "main" now exists as a real, actively-diverging branch (opened for
+        # the next major's development) — it is NOT an alias for the current
+        # stable release. Checking it out as "11.x" silently builds against
+        # the wrong branch's code whenever an issue explicitly targets "main".
+        # Verify liveness against the repo rather than hardcoding either way,
+        # since "main" existing (or not) as a real branch can change over time.
+        if raw_version.lower().strip() == "main" and "main" in VersionResolver._list_core_branches():
+            return {
+                "checkout_ref": "main",
+                "project_type": "drupal12",
+                "php_version": "8.5",
+            }
+
         checkout_ref = VersionResolver.normalize_branch(raw_version)
         major = VersionResolver.detect_major(checkout_ref)
         project_type, php_version = VersionResolver.VERSION_MAP.get(

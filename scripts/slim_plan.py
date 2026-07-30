@@ -42,6 +42,16 @@ def main():
         # the plan below — surface it and let the user decide before
         # Step 3 provisions anything. See Step 2.
         "environment_signals":     plan.get("environment_signals", []),
+        # The full (or, past 30 comments, representatively-sampled) comment
+        # thread — date/author/cleaned-text per comment. Read this for the
+        # discussion synthesis by default; comment_signal_details above is
+        # only keyword hits, not a substitute for actually reading the
+        # conversation. comment_thread_sampled is true when
+        # comment_thread_total exceeds the number of entries here — say so
+        # rather than presenting a sample as the complete thread.
+        "comment_thread":           plan.get("comment_thread", []),
+        "comment_thread_total":     plan.get("comment_thread_total", 0),
+        "comment_thread_sampled":   plan.get("comment_thread_sampled", False),
         "modified_files":           plan.get("modified_files", []),
         "reproduction_steps":       plan.get("reproduction_steps", []),
         "detected_mrs":             plan.get("detected_mrs", []),

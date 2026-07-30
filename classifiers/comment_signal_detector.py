@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import re
 
 
@@ -85,7 +85,7 @@ class CommentSignalDetector:
 
     @staticmethod
     def _detect_environment_signals(
-        comment_bodies: List[str], current_project_name: str = None
+        comment_bodies: List[str], current_project_name: Optional[str] = None
     ) -> List[Dict]:
         found = []
         seen_snippets = set()
@@ -137,7 +137,7 @@ class CommentSignalDetector:
         return found
 
     @staticmethod
-    def _detect_related_issues(comment_bodies: List[str], current_issue_id: str = None) -> List[Dict]:
+    def _detect_related_issues(comment_bodies: List[str], current_issue_id: Optional[str] = None) -> List[Dict]:
         found = {}
         for comment in comment_bodies:
             clean_comment = re.sub(r"<.*?>", "", comment)
@@ -159,8 +159,8 @@ class CommentSignalDetector:
     @staticmethod
     def detect(
         comment_bodies: List[str],
-        current_issue_id: str = None,
-        current_project_name: str = None,
+        current_issue_id: Optional[str] = None,
+        current_project_name: Optional[str] = None,
     ) -> Dict:
 
         detected = set()

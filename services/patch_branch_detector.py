@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 class PatchBranchDetector:
@@ -16,7 +16,7 @@ class PatchBranchDetector:
     ]
 
     @staticmethod
-    def detect_branch_from_filename(filename: str) -> str:
+    def detect_branch_from_filename(filename: Optional[str]) -> Optional[str]:
         """
         Extract branch reference from patch filename if present.
         """
@@ -32,7 +32,7 @@ class PatchBranchDetector:
         return None
 
     @staticmethod
-    def detect_major_from_paths(modified_files: List[str]) -> str:
+    def detect_major_from_paths(modified_files: List[str]) -> Optional[str]:
         """
         Detect if patch is Drupal 7 or Drupal 8+ based on paths.
         Drupal 8+ has core/ directory structure.
@@ -49,7 +49,7 @@ class PatchBranchDetector:
 
     @staticmethod
     def check_compatibility(
-        patch_filename: str,
+        patch_filename: Optional[str],
         modified_files: List[str],
         checkout_ref: str
     ) -> Dict:

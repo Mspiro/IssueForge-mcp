@@ -86,10 +86,13 @@ class IssueForgeServer:
         # sit mid-thread on long issues (e.g. comment #47 of 155).
         comment_ids = metadata.get("comment_ids", [])
         comment_bodies = []
+        comment_thread = []
+        comment_thread_sampled = False
         if comment_ids:
             if len(comment_ids) <= 30:
                 sample_ids = list(comment_ids)
             else:
+                comment_thread_sampled = True
                 first = comment_ids[:5]
                 last = comment_ids[-10:]
                 middle_pool = comment_ids[5:-10]
@@ -99,6 +102,20 @@ class IssueForgeServer:
             comments = self.comment_client.get_multiple_comments(sample_ids)
             comment_bodies = [
                 c["body_html"] for c in comments if c.get("body_html")
+            ]
+            # Full thread text (not just heuristic-derived signals) so the
+            # agent can read the actual discussion by default in Step 2,
+            # instead of only seeing it when explicitly asked to "look
+            # deeper" — same data already fetched above for the detectors,
+            # just also preserved here instead of being discarded after.
+            comment_thread = [
+                {
+                    "date": IssueForgeServer._format_comment_date(c.get("created")),
+                    "author": c.get("author_name", ""),
+                    "text": IssueForgeServer._clean_comment_html(c.get("body_html", "")),
+                }
+                for c in comments
+                if c.get("body_html")
             ]
 
         comment_signal_result = CommentSignalDetector.detect(
@@ -179,6 +196,9 @@ class IssueForgeServer:
         context["reproduction_steps"] = reproduction_steps
         context["reproduction_script"] = reproduction_script
         context["detected_mrs"] = detected_mrs
+        context["comment_thread"] = comment_thread
+        context["comment_thread_total"] = len(comment_ids)
+        context["comment_thread_sampled"] = comment_thread_sampled
 
         # Evidence bundle — the primary input for root-cause reasoning by
         # the model driving the skill. The heuristic classifiers above are
@@ -220,3 +240,25 @@ class IssueForgeServer:
         context["llm_analysis"] = context["heuristic_hints"]
 
         return context
+
+    @staticmethod
+    def _clean_comment_html(body_html: str) -> str:
+        """Strip tags/entities and collapse whitespace — same approach
+        issue_previewer.py already uses for its recent-comments preview,
+        applied here to the full fetched thread instead of just the last 3.
+        """
+        import re
+        import html as html_module
+        text = re.sub(r"<[^>]+>", " ", body_html or "")
+        text = html_module.unescape(text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _format_comment_date(timestamp) -> str:
+        if not timestamp:
+            return ""
+        try:
+            from datetime import datetime
+            return datetime.fromtimestamp(int(timestamp)).strftime("%Y-%m-%d")
+        except (ValueError, TypeError, OSError):
+            return ""

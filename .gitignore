@@ -45,3 +45,6 @@ logs/
 .claude/settings*
 .claude/scheduled_tasks*
 PROPOSAL.md
+
+# Session/presentation material — local only
+session/

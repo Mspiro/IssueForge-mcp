@@ -89,7 +89,10 @@ _PREVIEW = {
             "target_branch": "11.x",
         }
     ],
-    "discussion_summary": "• Bug: multi-value input silently accepted\n• Fix proposed in MR !1234",
+    "recent_comments": [
+        {"date": "2026-01-02", "author": "jane", "is_self": False,
+         "text": "Bug: multi-value input silently accepted"},
+    ],
 }
 
 
@@ -113,9 +116,10 @@ class TestFormatReport:
         assert "opened" in report
         assert "11.x" in report
 
-    def test_contains_discussion_summary(self):
+    def test_contains_recent_comments(self):
         report = IssuePreviewer.format_report(_PREVIEW)
-        assert "multi-value" in report
+        assert "RECENT_COMMENTS:" in report
+        assert "@jane: Bug: multi-value" in report
 
     def test_no_patches_shows_none(self):
         preview = {**_PREVIEW, "patches": []}

@@ -9,25 +9,19 @@ import services.credential_manager as cm
 
 
 class TestIsSetupComplete:
-    def test_returns_true_when_both_set(self):
-        with patch.dict(os.environ, {"GIT_USER_NAME": "Jane", "GIT_USER_EMAIL": "jane@x.com"}):
+    """Setup is complete once the GitLab token is saved."""
+
+    def test_returns_true_when_token_set(self):
+        with patch.dict(os.environ, {"GITLAB_TOKEN": "glpat-abc"}):
             assert cm.is_setup_complete() is True
 
-    def test_returns_false_when_name_missing(self):
-        env = {"GIT_USER_NAME": "", "GIT_USER_EMAIL": "jane@x.com"}
-        with patch.dict(os.environ, env, clear=False):
-            os.environ.pop("GIT_USER_NAME", None)
-            assert cm.is_setup_complete() is False
-
-    def test_returns_false_when_email_missing(self):
-        env = {"GIT_USER_NAME": "Jane", "GIT_USER_EMAIL": ""}
-        with patch.dict(os.environ, env):
-            assert cm.is_setup_complete() is False
-
-    def test_returns_false_when_both_missing(self):
+    def test_returns_false_when_token_missing(self):
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("GIT_USER_NAME", None)
-            os.environ.pop("GIT_USER_EMAIL", None)
+            os.environ.pop("GITLAB_TOKEN", None)
+            assert cm.is_setup_complete() is False
+
+    def test_returns_false_when_token_blank(self):
+        with patch.dict(os.environ, {"GITLAB_TOKEN": "   "}):
             assert cm.is_setup_complete() is False
 
 

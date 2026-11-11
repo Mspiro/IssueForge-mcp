@@ -2,6 +2,8 @@ import requests
 import time
 import re
 
+from services import gitlab_issue_client
+
 
 class DrupalAPIClient:
     """
@@ -49,10 +51,11 @@ class DrupalAPIClient:
     def __init__(self):
         self.session = requests.Session()
         self.cache = {}
+        self._gitlab_raw = {}
 
     def extract_issue_id(self, issue_url: str):
 
-        match = re.search(r"/issues/(\d+)", issue_url)
+        match = re.search(r"/(?:issues|node|i)/(\d+)", issue_url)
 
         if not match:
             raise ValueError("Invalid Drupal issue URL")
@@ -93,6 +96,9 @@ class DrupalAPIClient:
         raise Exception("Rate limited after multiple retries")
 
     def fetch_issue_data(self, issue_id):
+
+        if str(issue_id) in self._gitlab_raw:
+            return self._gitlab_raw[str(issue_id)]
 
         url = f"{self.BASE_URL}/node/{issue_id}.json"
 
@@ -146,19 +152,47 @@ class DrupalAPIClient:
             "issue_url": issue_json.get("url"),
         }
 
+    def _gitlab_metadata(self, project, iid):
+        metadata, raw = gitlab_issue_client.get_issue(project, iid)
+        self._gitlab_raw[metadata["issue_id"]] = raw
+        return metadata
+
     def get_issue_metadata(self, issue_url: str):
+
+        # Queues moved to GitLab work items (e.g. ai, ai_agents)
+        gitlab_ref = gitlab_issue_client.parse_url(issue_url)
+        if gitlab_ref:
+            return self._gitlab_metadata(*gitlab_ref)
 
         issue_id = self.extract_issue_id(issue_url)
 
         issue_json = self.fetch_issue_data(issue_id)
 
-        metadata = self.parse_issue_metadata(issue_json)
-
         # Extract project name from URL: e.g. /project/layout_paragraphs/issues/3401176
-        project_name = "drupal"
+        url_project = None
         match = re.search(r"/project/([^/]+)", issue_url)
         if match:
-            project_name = match.group(1)
+            url_project = match.group(1)
 
-        metadata["project_name"] = project_name
+        # drupal.org answers {"new_url": ...} for issues migrated to GitLab
+        gitlab_ref = gitlab_issue_client.parse_url(issue_json.get("new_url", ""))
+        if gitlab_ref:
+            return self._gitlab_metadata(*gitlab_ref)
+
+        # New GitLab-only issue IDs can collide with an unrelated drupal.org node
+        node_project = (issue_json.get("field_project") or {}).get("machine_name")
+        if issue_json.get("type", "project_issue") != "project_issue":
+            if url_project:
+                return self._gitlab_metadata(url_project, issue_id)
+            raise ValueError(
+                f"#{issue_id} is not a drupal.org issue. If it is a GitLab work "
+                f"item, pass its git.drupalcode.org URL."
+            )
+        if (url_project and node_project and node_project != url_project
+                and gitlab_issue_client.issue_exists(url_project, issue_id)):
+            return self._gitlab_metadata(url_project, issue_id)
+
+        metadata = self.parse_issue_metadata(issue_json)
+        metadata["project_name"] = url_project or node_project or "drupal"
+        metadata["source"] = "drupal.org"
         return metadata

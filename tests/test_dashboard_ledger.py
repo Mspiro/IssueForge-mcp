@@ -47,7 +47,8 @@ class TestUpsert:
         assert entry["first_worked"] == "2026-07-17"
         assert entry["last_worked"] == "2026-07-17"
         assert entry["mr"] == {"project": "drupal", "iid": "12139", "state": None,
-                               "pipeline_status": None, "pipeline_url": None}
+                               "pipeline_status": None, "pipeline_label": None,
+                               "pipeline_url": None}
         assert entry["credit"] == {"credited": False, "checked_at": None}
         assert len(data["issues"]) == 1
 

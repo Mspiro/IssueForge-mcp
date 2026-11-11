@@ -100,6 +100,8 @@ class GitlabMrClient:
 
         raw = self.detect_mr_urls_from_issue_body(issue_html)
         raw += self.detect_mr_urls_from_comments(comment_bodies)
+        # GitLab work items list their MRs directly
+        raw += self.detect_mr_urls_from_comments(metadata.get("related_mr_urls", []))
 
         seen = set()
         unique = []

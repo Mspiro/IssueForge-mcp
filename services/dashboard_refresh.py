@@ -62,6 +62,8 @@ def _refresh_entry(entry: Dict, api_client: DrupalAPIClient, mr_client: GitlabMr
         metadata = api_client.get_issue_metadata(issue_url)
         status_value = metadata.get("status")
         comment_count = len(metadata.get("comment_ids", []))
+        if metadata.get("source") == "gitlab":
+            entry["issue_url"] = metadata["issue_url"]
     except Exception as e:
         logger.warning("Could not fetch issue status for #%s: %s", issue_id, e)
         status_error = str(e)

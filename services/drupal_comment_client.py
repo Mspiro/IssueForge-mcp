@@ -1,6 +1,8 @@
 import requests
 import time
 
+from services import gitlab_issue_client
+
 
 class DrupalCommentClient:
     """
@@ -70,6 +72,9 @@ class DrupalCommentClient:
         return ""
 
     def get_comment(self, comment_id):
+
+        if str(comment_id).startswith(gitlab_issue_client.COMMENT_PREFIX):
+            return gitlab_issue_client.get_comment(comment_id)
 
         url = f"{self.BASE_URL}/{comment_id}.json"
 

@@ -29,7 +29,8 @@ import requests
 logger = logging.getLogger("IssueForge.CreditTracker")
 
 _BASE_URL = "https://www.drupal.org/contribution-records-by-user"
-_NODE_ID_PATTERN = re.compile(r"/node/(\d+)")
+# GitLab work-item records link to /-/work_items/<iid> instead of /node/<nid>
+_NODE_ID_PATTERN = re.compile(r"/(?:node|work_items|issues)/(\d+)")
 _MAX_PAGES = 5  # safety cap for scoped (tracked-issue) lookups
 _MAX_PAGES_FULL_HISTORY = 20  # a larger, still-bounded cap for the opt-in
                               # "lifetime credit history" view — prolific

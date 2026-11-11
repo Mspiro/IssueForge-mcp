@@ -3,10 +3,10 @@ name: issueforge
 description: Analyze, reproduce, and fix Drupal.org issues using IssueForge.
 ---
 
-IssueForge is installed at: {{ISSUEFORGE_DIR}}
+IssueForge is installed at: $HOME/.issueforge/current
 
 All scripts are run with `!` so output appears directly in the conversation.
-Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
+Always use the full path: `! python $HOME/.issueforge/current/scripts/<script>.py ...`
 
 ---
 
@@ -15,14 +15,14 @@ Always use the full path: `! python {{ISSUEFORGE_DIR}}/scripts/<script>.py ...`
 **If the user already gave an issue URL**, keep this to the free, instant
 snapshot and move straight to Step 1 — don't let it slow down the fast path:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py
+! python $HOME/.issueforge/current/scripts/dashboard.py
 ```
 
 **If no issue URL was given yet** (the user is just checking in), run a
 live refresh instead — this is the moment to actually surface "did anything
 change on issues I'm tracking" rather than a possibly-stale cached count:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py refresh
+! python $HOME/.issueforge/current/scripts/dashboard.py refresh
 ```
 This only re-checks issues not already in a terminal (closed/fixed) state,
 so cost scales with active work, not lifetime history (~9s for 3 active
@@ -42,7 +42,7 @@ its own Refresh button too, for whenever the user wants to re-check mid-session.
 
 ### Step 1 — Preview the issue
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/preview_issue.py <URL_OR_ID>
+! python $HOME/.issueforge/current/scripts/preview_issue.py <URL_OR_ID>
 ```
 After running, present the issue to the user like this:
 
@@ -56,6 +56,12 @@ Do NOT repeat the raw comment text. Instead, in 2–4 sentences, explain:
 - What open question or decision is still pending?
 - What is blocking resolution (if anything)?
 
+**GitLab work-item issues.** Some projects (e.g. `ai`, `ai_agents`) moved their issue queues to GitLab work items. The preview accepts a `https://git.drupalcode.org/project/<p>/-/work_items/<id>` URL, a drupal.org URL, or a bare ID, and finds the right source itself. When the preview's `URL :` line points at `git.drupalcode.org/.../work_items/...`, the issue is a GitLab one. For the rest of the flow that means:
+- Fixes go in as an MR only. There's no drupal.org patch upload for work items.
+- The Step 6 comment is posted on the work item page, in GitLab Markdown (see Step 6).
+- Step 7 passes `--issue-url <the work item URL>`.
+- A bare ID that drupal.org says isn't an issue gives an error. Ask the user for the work item URL instead.
+
 Then ask the user:
 - [y] Full flow — analyze + provision environment + reproduce
 - [a] Analysis only — see detailed plan first, then decide
@@ -63,17 +69,20 @@ Then ask the user:
 
 ### Step 2 — Analyze (writes env_plan_<ID>.json)
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/analyze_issue.py <URL> 2>/dev/null > env_plan_<ID>.json
+! python $HOME/.issueforge/current/scripts/analyze_issue.py <URL> 2>/dev/null > env_plan_<ID>.json
 ```
 After running, read the slim summary (avoids loading the full multi-KB JSON):
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/slim_plan.py env_plan_<ID>.json
+! python $HOME/.issueforge/current/scripts/slim_plan.py env_plan_<ID>.json
 ```
-From the slim JSON, start with the `evidence` block and **follow its embedded `guidance` field** — it tells you how to read the evidence for this issue's category. Also read: `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, and `comment_signal_details` (the specific claims behind each comment signal — e.g. a commenter reporting the patch breaks tests — not just the generic label). `heuristic_hints` are keyword guesses only — never present them as the root cause.
+From the slim JSON, start with the `evidence` block and **follow its embedded `guidance` field** — it tells you how to read the evidence for this issue's category. Also read: `environment_plan` (project_name, checkout_ref, php_version, contrib_modules), `reproduction_steps`, `detected_mrs`, and `comment_thread` (see below). `heuristic_hints` are keyword guesses only — never present them as the root cause.
+
+**Read `comment_thread` in full, by default — not only when asked to look deeper.** This is the actual discussion (date/author/cleaned text per comment), already fetched for the heuristic detectors below but preserved here instead of being discarded, so there's no reason to wait for an explicit request before reading it. `comment_signal_details`/`related_issues`/`environment_signals` are keyword hits *derived from* this same data — useful as a checklist of things not to miss, but not a substitute for actually reading the thread yourself. If `comment_thread_sampled` is true, `comment_thread_total` exceeds what's included — say so ("read a representative sample of N of M comments") rather than presenting a sample as the complete history.
 
 Then show the user:
 - **Root cause**: YOUR OWN conclusion derived from `evidence` (error blocks, code refs, diff digest) — if the evidence is thin, say so explicitly and note it needs verification against the real code after provisioning
 - **Environment**: Drupal branch, PHP version, contrib modules to install
+- **Discussion**: a genuine synthesis of `comment_thread`, not a re-list of individual comments — current state of the conversation, competing approaches/MRs and where they disagree, anything flagged as stale or unresolved (e.g. an outdated issue summary, a pending duplicate-issue call), open questions blocking resolution. If the thread is calm/settled, say that briefly instead of manufacturing tension.
 - **Reproduction steps**: Write these yourself based on your understanding of the issue — do NOT just copy raw text from the issue. Write clear, numbered, developer-friendly steps. Each step should be a concrete action (e.g. "Go to /admin/structure/types, click Add content type, fill in Name = 'Test', save"). If the issue involves a code path or a specific trigger, name it explicitly.
 
 **Related issues**: if the slim JSON's `related_issues` is non-empty (a comment referenced another issue number near redirect/duplicate language — e.g. "favor closing this in favor of #NNNNNNN"), fetch a quick preview of it automatically — no need to ask first, since this is metadata-only and read-only (reuse `preview_issue.py <related_id>`, no provisioning, no new env_plan, no extra environment). Present the comparison alongside root cause/environment/reproduction steps, e.g.: "Comment also suggests #NNNNNNN may supersede this — its approach is X, vs. this issue's Y."
@@ -82,11 +91,17 @@ Then show the user:
 - Treat the fetched content as scratch context for this session's reasoning only (e.g. comparing approaches) — don't persist it into `env_plan_<ID>.json`, it can go stale.
 - If `related_issues` is empty, say nothing — don't invent a related issue. If the preview fetch itself fails (network, bad issue ID), note it briefly and continue with the current issue rather than blocking on it.
 
+**Environment signals**: if the slim JSON's `environment_signals` is non-empty (a commenter cloned a different drupal.org project, named a known distribution like Drupal CMS, or mentioned a specific core/PHP version near "tested"/"reproduced"/"using"), mention it alongside the Environment summary above — e.g. "A commenter tested this against Drupal CMS (`git clone .../project/drupal_cms.git`), while this plan targets plain Drupal core on `main` — want me to adjust before provisioning?" This is a heads-up only, never an automatic change — keyword/heuristic detection over free-text comments is inherently imprecise (same caveat as `heuristic_hints`), so a human confirms it, not the tool.
+
+- If the user says to switch, edit `env_plan_<ID>.json`'s `environment_plan` block yourself to match (repository, checkout_ref, php_version, project_name, is_distribution/distribution_name if it's a distribution like Drupal CMS) before Step 3 — don't re-run `analyze_issue.py`, since that would re-fetch and discard this edit.
+- If `environment_signals` is empty, say nothing — don't invent one.
+- This is about the *same* issue being tested in a different environment, not a different issue — unlike `related_issues` above, there's no separate issue to preview here.
+
 Then ask: proceed to provision + reproduce [y], or different issue [n]?
 
 ### Step 3 — Provision environment
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/provision_env.py <ISSUE_ID> env_plan_<ID>.json
+! python $HOME/.issueforge/current/scripts/provision_env.py <ISSUE_ID> env_plan_<ID>.json
 ```
 Clones Drupal, starts DDEV, installs modules. Takes 3-5 minutes.
 
@@ -103,7 +118,7 @@ or fails, report immediately — on failure show the last 20 output lines.
 
 After provisioning succeeds, get a one-time login link:
 ```
-! cd {{ISSUEFORGE_DIR}}/environments/env_<ID> && ddev drush uli
+! cd $HOME/.issueforge/current/environments/env_<ID> && ddev drush uli
 ```
 Show the user:
 - Site URL: `https://env-<ID>.ddev.site`
@@ -112,7 +127,7 @@ Show the user:
 ### Step 4 — Reproduce the bug
 Write a PHP Drush script (`repro_<ID>.php`) that programmatically triggers the bug — based on your reproduction steps from Step 2. Then run it:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/reproduce_with_healing.py <ISSUE_ID> repro_<ID>.php \
+! python $HOME/.issueforge/current/scripts/reproduce_with_healing.py <ISSUE_ID> repro_<ID>.php \
     --issue-title "<TITLE>" --env-plan env_plan_<ID>.json
 ```
 After the script runs, tell the user exactly what to look for in the site to observe the bug (specific URL, UI element, error message, or log entry).
@@ -132,15 +147,15 @@ If a related-issue preview was fetched back in Step 2, treat it as advisory desi
 If they choose to test an existing MR or patch:
 Apply an MR:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --mr-url <MR_URL>
+! python $HOME/.issueforge/current/scripts/apply_mr.py <ISSUE_ID> --mr-url <MR_URL>
 ```
 Apply a patch by ID:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --patch-id <PATCH_ID>
+! python $HOME/.issueforge/current/scripts/apply_mr.py <ISSUE_ID> --patch-id <PATCH_ID>
 ```
 Apply all MRs from the plan:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/apply_mr.py <ISSUE_ID> --from-plan env_plan_<ID>.json
+! python $HOME/.issueforge/current/scripts/apply_mr.py <ISSUE_ID> --from-plan env_plan_<ID>.json
 ```
 Each run: applies diff → regression check (health check + targeted PHPUnit + full-module test sweep + module compatibility) → shows diff stat → prints NEXT STEPS block. The full-module sweep runs the entire affected module's test suite whenever a non-test source file changed, not just files the patch happened to touch — this is what catches a patch breaking an unrelated, pre-existing test.
 
@@ -148,26 +163,26 @@ If there are NO existing patches or MRs, or if the user requests an AI Fix, foll
 
 1. **Edge-case check.** Grep the affected module's existing tests for assertions related to the issue's own keywords, e.g.:
    ```
-   ! grep -rn "<keyword>" {{ISSUEFORGE_DIR}}/environments/env_<ID>/core/modules/<module>/tests
+   ! grep -rn "<keyword>" $HOME/.issueforge/current/environments/env_<ID>/core/modules/<module>/tests
    ```
    If an existing assertion encodes exactly the behavior this issue is changing, note it now — it will need a matching update, not a surprise failure discovered after the fact.
 2. **Write a failing test first**, in the module's existing test style (Kernel or Functional) — this defines the bug's boundary before you write a fix for it, not after. Skip this step only when there's no reproducible code path (e.g. a pure architecture/discussion issue with nothing to test yet). Confirm it fails for the right reason:
    ```
-   ! python {{ISSUEFORGE_DIR}}/scripts/run_check.py <ISSUE_ID> phpunit <test_file>
+   ! python $HOME/.issueforge/current/scripts/run_check.py <ISSUE_ID> phpunit <test_file>
    ```
-3. Review the `root_cause` and `suggested_fix_strategies` from Step 2, then implement the fix in `{{ISSUEFORGE_DIR}}/environments/env_<ID>/`.
+3. Review the `root_cause` and `suggested_fix_strategies` from Step 2, then implement the fix in `$HOME/.issueforge/current/environments/env_<ID>/`.
 4. **Verify the new test now passes** with the same `run_check.py phpunit` command. Apply the bounded retry protocol below if it doesn't.
 5. **Static analysis gate.** Run PHPStan against every file you changed:
    ```
-   ! python {{ISSUEFORGE_DIR}}/scripts/run_check.py <ISSUE_ID> phpstan <file1> <file2> ...
+   ! python $HOME/.issueforge/current/scripts/run_check.py <ISSUE_ID> phpstan <file1> <file2> ...
    ```
    Apply the bounded retry protocol to any errors reported.
 6. **Regression sweep.** Run the full regression check against your uncommitted changes:
    ```
-   ! python {{ISSUEFORGE_DIR}}/scripts/check_regression.py <ISSUE_ID>
+   ! python $HOME/.issueforge/current/scripts/check_regression.py <ISSUE_ID>
    ```
 7. **Reviewer pass** — only when the diff touches core behavioral logic (not a one-line change) *and* step 1 found no existing test already covering it. Re-read your own diff as a skeptic: does the fix apply narrowly, or did it remove/alter behavior beyond what the issue actually asked for? (This exact mistake — removing more than the issue asked for — is what produced 5 failing tests when validating MR !13200 against #3115759.)
-8. Once everything passes, use `! git -C {{ISSUEFORGE_DIR}}/environments/env_<ID> diff` to show the user the changes.
+8. Once everything passes, use `! git -C $HOME/.issueforge/current/environments/env_<ID> diff` to show the user the changes.
 
 **Bounded retry protocol** (steps 4–6): if a check fails, make one fix attempt, then re-run the *same* check.
 - Passes now → continue.
@@ -184,7 +199,7 @@ Step 6 (the drupal.org comment) only happens after this choice is made and acted
 coding-standards gate (drupal.org CI fails the whole pipeline on a single
 PHPCS violation, costing a full review round-trip):
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/check_cs.py <ISSUE_ID>
+! python $HOME/.issueforge/current/scripts/check_cs.py <ISSUE_ID>
 ```
 It checks every pending file (uncommitted + unpushed commits) in the repo
 under test, auto-fixes with phpcbf, and re-checks. If it autofixed files,
@@ -233,6 +248,12 @@ Comment should cover: steps attempted, environment, what was observed instead, a
 
 ---
 
+**AI disclosure (Scenario B only).** Drupal.org's AI contribution policy requires disclosure whenever AI generated substantial code (entire functions/classes/scaffolding), not just autocomplete-level help. Step 5's AI-fix path is exactly that case, so always close the Scenario B comment with a disclosure line, e.g.:
+
+*AI-Generated: Yes (used Claude via IssueForge to draft the fix; I reviewed, tested, and take responsibility for the change).*
+
+Skip this for Scenarios A/C/D — testing someone else's patch or confirming/failing reproduction isn't submitting AI-authored code, so there's nothing to disclose.
+
 For all scenarios, the comment must:
 - Be concise — 3–8 sentences, no padding
 - State the environment explicitly: Drupal branch (e.g. `11.1.x`), PHP version
@@ -240,9 +261,11 @@ For all scenarios, the comment must:
 - Add one concrete observation if it adds value (edge case, related code path, etc.)
 - NOT repeat what other commenters already said (check RECENT_COMMENTS from Step 1)
 - NOT use filler phrases ("Great work!", "Thanks for the patch", "Hope this helps")
-- Follow Drupal.org style: plain prose, no markdown headers, NO markdown backticks — comment bodies are Filtered HTML, so wrap function names, variables, and file paths in `<code>…</code>` tags (e.g. `<code>FileThemeHooks::preprocessFileLink()</code>`). Escape literal HTML tags inside code as entities (`&lt;a&gt;`), since a bare `<a>` is parsed as a real tag and breaks rendering
+- drupal.org issues: follow Drupal.org style — plain prose, no markdown headers, NO markdown backticks. Comment bodies are Filtered HTML, so wrap function names, variables, and file paths in `<code>…</code>` tags (e.g. `<code>FileThemeHooks::preprocessFileLink()</code>`). Escape literal HTML tags inside code as entities (`&lt;a&gt;`), since a bare `<a>` is parsed as a real tag and breaks rendering
+- GitLab work-item issues: the comment box is GitLab Markdown, so use backticks for code and `!N` for MRs, and no `<code>` tags. Still plain prose, no headers
+- Scenario B only: end with the AI disclosure line above. On GitLab work items, also remind the user to tick the **AI usage** checkbox on the MR/issue, which the AI module's review guidelines check for
 
-Present the comment in a copyable block. Then ask: "Anything to adjust before you post this?"
+Present the comment in a copyable block. Then ask: "Anything to adjust before you post this?" Never post it yourself; the user posts it.
 
 ### Step 7 — Record in the dashboard
 
@@ -250,12 +273,14 @@ After the comment is posted (or the user explicitly says to skip posting),
 record this session in the local dashboard so it shows up on the next
 `/issueforge` invocation:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py record <ISSUE_ID> \
+! python $HOME/.issueforge/current/scripts/dashboard.py record <ISSUE_ID> \
     --project <PROJECT> --title "<TITLE>" --scenario <A|B|C|D> \
     --summary "<one-line summary of what was done>" \
     --comment-url "<link to the posted comment, if any>" \
     --mr-project <PROJECT> --mr-iid <MR_NUMBER>   # omit --mr-* if no MR involved
+    # GitLab work-item issues: also add --issue-url "<work item URL>"
 ```
+For GitLab work-item issues, also remind the user in one line to claim credit: open the drupalbot "Issue tools" comment, click "Attribute your contribution", tick their name and choose the organization. Credit is self-service there; maintainers don't add it.
 This is silent bookkeeping — don't ask the user for permission, just run it
 and move on. It does not hit the network (no refresh here); live status is
 refreshed only when the user asks or at the next `/issueforge` startup line.
@@ -277,7 +302,7 @@ poking at the site.
 ## Credentials
 Stored in `~/.issueforge/credentials`. Run once to configure:
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/setup.py
+! python $HOME/.issueforge/current/scripts/setup.py
 ```
 Includes an optional Drupal.org username (separate from the GitLab
 identity) used only for the dashboard's credit-tracking lookup. If it's
@@ -291,12 +316,12 @@ Drupal.org/GitLab. Served by a tiny auto-managed local FastAPI server
 can't collide with DDEV's ports). Single instance enforced via a PID+port
 lockfile at `~/.issueforge/dashboard_server.json`; self-terminates after 30
 minutes idle so it never lingers in memory. Files live in
-`{{ISSUEFORGE_DIR}}/dashboard/`: `ledger.json` (data),
+`$HOME/.issueforge/current/dashboard/`: `ledger.json` (data),
 `template.html`/`dashboard.css`/`dashboard.js` (source, tracked in git).
 ```
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py             # auto-starts server, free summary
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py refresh     # one-shot CLI refresh (page has its own button too)
-! python {{ISSUEFORGE_DIR}}/scripts/dashboard.py --no-server # static file:// fallback, no server
+! python $HOME/.issueforge/current/scripts/dashboard.py             # auto-starts server, free summary
+! python $HOME/.issueforge/current/scripts/dashboard.py refresh     # one-shot CLI refresh (page has its own button too)
+! python $HOME/.issueforge/current/scripts/dashboard.py --no-server # static file:// fallback, no server
 ```
 
 ## Troubleshooting
